@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT License
 pragma solidity 0.8.21;
 
-import "lib/solmate/src/mixins/ERC4626.sol";
+import "lib/solmate/src/tokens/ERC4626.sol";
 
 interface IInvEscrow {
     function onDeposit() external view returns (uint);
