@@ -4,7 +4,7 @@ pragma solidity 0.8.21;
 import "lib/solmate/src/tokens/ERC4626.sol";
 
 interface IInvEscrow {
-    function onDeposit() external view returns (uint);
+    function onDeposit() external;
     function balance() external view returns (uint);
     function claimDBR() external;
     function claimable() external view returns (uint);
@@ -16,6 +16,7 @@ interface IMarket {
     function withdraw(uint amount) external;
     function createEscrow(address user) external returns (address);
     function dbr() external returns (address);
+    function collateral() external returns (address);
 }
 
 interface IERC20 {
@@ -25,20 +26,21 @@ interface IERC20 {
 }
 
 /**
- * @title sInv
+ * @title sINV
  * @dev Auto-compounding ERC4626 wrapper for asset FiRM deposits utilizing xy=k auctions.
  * WARNING: While this vault is safe to be used as collateral in lending markets, it should not be allowed as a borrowable asset.
  * Any protocol in which sudden, large and atomic increases in the value of an asset may be a security risk should not integrate this vault.
  */
-contract sInv is ERC4626 {
+contract sINV is ERC4626 {
     
-    uint constant MIN_BALANCE = 10**16; // 1 cent
+    uint public constant MIN_ASSETS = 10**16; // 1 cent
     uint public constant MIN_SHARES = 10**18;
     uint public constant MAX_ASSETS = 10**32; // 100 trillion asset
     uint public period = 7 days;
     IMarket public immutable invMarket;
     IInvEscrow public immutable invEscrow;
     ERC20 public immutable DBR;
+    ERC20 public immutable INV;
     address public gov;
     address public pendingGov;
     uint public minBuffer;
@@ -50,7 +52,7 @@ contract sInv is ERC4626 {
     uint public lastBuy;
 
     /**
-     * @dev Constructor for sInv contract.
+     * @dev Constructor for sINV contract.
      * WARNING: MIN_SHARES will always be unwithdrawable from the vault. Deployer should deposit enough to mint MIN_SHARES to avoid causing user grief.
      * @param _inv Address of the asset token.
      * @param _invMarket Address of the asset FiRM market.
@@ -67,8 +69,10 @@ contract sInv is ERC4626 {
         invMarket = IMarket(_invMarket);
         invEscrow = IInvEscrow(invMarket.createEscrow(address(this)));
         DBR = ERC20(IMarket(_invMarket).dbr());
+        INV = ERC20(IMarket(_invMarket).collateral());
         gov = _gov;
         targetK = _K;
+        prevK = _K;
         asset.approve(address(invMarket), type(uint).max);
     }
 
@@ -84,12 +88,10 @@ contract sInv is ERC4626 {
     function afterDeposit(uint256 assets, uint256) internal override {
         require(totalSupply >= MIN_SHARES, "Shares below MIN_SHARES");
         uint invBal = asset.balanceOf(address(this));
-        if(invBal < minBuffer){
-            asset.transfer(address(invEscrow), invBal);
-        } else {
+        if(invBal > minBuffer){
             asset.transfer(address(invEscrow), invBal - minBuffer);
+            invEscrow.onDeposit();
         }
-        invEscrow.onDeposit();
     }
 
     /**
@@ -99,8 +101,8 @@ contract sInv is ERC4626 {
      */
     function beforeWithdraw(uint256 assets, uint256 shares) internal override {
         uint _totalAssets = totalAssets();
-        require(totalAssets() >= assets + MIN_BALANCE, "Insufficient assets");
-        require(totalSupply - shares >= MIN_SHARES, "Shares below MIN_SHARES");
+        require(totalAssets() >= assets + MIN_ASSETS, "Insufficient assets");
+        require(totalSupply >= shares + MIN_SHARES, "Shares below MIN_SHARES");
         uint invBal = asset.balanceOf(address(this));
         if(assets > invBal) {
             uint withdrawAmount = assets - invBal + minBuffer;
@@ -118,13 +120,22 @@ contract sInv is ERC4626 {
      * @return The total assets in the contract.
      */
     function totalAssets() public view override returns (uint) {
-        uint timeElapsed = block.timestamp % period;
+        uint periodsSinceLastBuy = block.timestamp / period - lastBuy / period;
+        uint _lastPeriodRevenue = lastPeriodRevenue;
+        uint _periodRevenue = periodRevenue;
+        uint invBal = invEscrow.balance() + asset.balanceOf(address(this));
+        if(periodsSinceLastBuy > 1){
+            return invBal < MAX_ASSETS ? invBal : MAX_ASSETS;
+        } else if(periodsSinceLastBuy == 1) {
+            _lastPeriodRevenue = periodRevenue;
+            _periodRevenue = 0;
+        }
         //TODO: Inspect this more thoroughly
-        uint remainingLastRevenue = lastPeriodRevenue * (period - timeElapsed) / period;
-        uint lockedRevenue = remainingLastRevenue + periodRevenue;
+        uint remainingLastRevenue = _lastPeriodRevenue * (period - block.timestamp % period) / period;
+        uint lockedRevenue = remainingLastRevenue + _periodRevenue;
         uint actualAssets;
-        if(invEscrow.balance() > lockedRevenue){
-            actualAssets = invEscrow.balance() - lockedRevenue;
+        if(invBal > lockedRevenue){
+            actualAssets = invBal - lockedRevenue;
         }
         return actualAssets < MAX_ASSETS ? actualAssets : MAX_ASSETS;
     }
@@ -189,6 +200,16 @@ contract sInv is ERC4626 {
         lastKUpdate = block.timestamp;
         emit SetTargetK(_K);
     }
+
+    /**
+     * @notice Set the min buffer
+     * @dev Min buffer is the buffer of INV held by the sINV contract, which can be withdrawn much more cheaply than if they were staked
+     * @param _minBuffer The new min buffer
+     */
+    function setMinBuffer(uint _minBuffer) external onlyGov {
+        minBuffer = _minBuffer;
+        emit SetMinBuffer(_minBuffer);
+    }
     
     /**
      * @dev Sets the new revenue accrual and K updating period.
@@ -202,7 +223,7 @@ contract sInv is ERC4626 {
     /**
      * @dev Allows users to buy DBR with asset.
      * WARNING: Never expose this directly to a UI as it's likely to cause a loss unless a transaction is executed immediately.
-     * Instead use the sInvHelper function or custom smart contract code.
+     * Instead use the sINVHelper function or custom smart contract code.
      * @param exactInvIn The exact amount of asset to spend.
      * @param exactDbrOut The exact amount of DBR to receive.
      * @param to The address that will receive the DBR.
@@ -219,6 +240,7 @@ contract sInv is ERC4626 {
         uint invReserve = k / DBRBalance + exactInvIn;
         require(invReserve * DBRReserve >= k, "Invariant");
         updatePeriodRevenue(exactInvIn);
+        INV.transferFrom(msg.sender, address(this), exactInvIn);
         DBR.transfer(to, exactDbrOut);
         emit Buy(msg.sender, to, exactInvIn, exactDbrOut);
     }
@@ -226,7 +248,7 @@ contract sInv is ERC4626 {
     /**
      * @dev Allows users to buy DBR with asset.
      * WARNING: Never expose this directly to a UI as it's likely to cause a loss unless a transaction is executed immediately.
-     * Instead use the sInvHelper function or custom smart contract code.
+     * Instead use the sINVHelper function or custom smart contract code.
      * @param exactInvIn The exact amount of asset to spend.
      * @param exactDbrOut The exact amount of DBR to receive.
      * @param to The address that will receive the DBR.
@@ -292,4 +314,5 @@ contract sInv is ERC4626 {
     event Buy(address indexed caller, address indexed to, uint exactInvIn, uint exactDbrOut);
     event SetTargetK(uint newTargetK);
     event SetPeriod(uint newPeriod);
+    event SetMinBuffer(uint newMinBuffer);
 }
