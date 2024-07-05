@@ -9,20 +9,26 @@ interface IInvEscrow {
     function claimDBR() external;
     function claimable() external view returns (uint);
     function DBR() external view returns (address);
+    function distributor() external view returns (address);
 }
 
 interface IMarket {
     function deposit(uint amount) external;
+    function deposit(uint amount, address user) external;
     function withdraw(uint amount) external;
-    function createEscrow(address user) external returns (address);
     function dbr() external returns (address);
     function collateral() external returns (address);
+    function predictEscrow(address user) external returns (address);
 }
 
 interface IERC20 {
     function transfer(address, uint) external returns (bool);
     function transferFrom(address, address, uint) external returns (bool);
     function balanceOf(address) external view returns (uint);
+}
+
+interface IDistributor {
+    function claimable(address) external view returns(uint);
 }
 
 /**
@@ -38,7 +44,7 @@ contract sINV is ERC4626 {
     uint public constant MAX_ASSETS = 10**32; // 100 trillion asset
     uint public period = 7 days;
     IMarket public immutable invMarket;
-    IInvEscrow public immutable invEscrow;
+    IInvEscrow public invEscrow;
     ERC20 public immutable DBR;
     ERC20 public immutable INV;
     address public gov;
@@ -66,8 +72,9 @@ contract sINV is ERC4626 {
         uint _K
     ) ERC4626(ERC20(_inv), "Staked Inv", "sasset") {
         require(_K > 0, "_K must be positive");
+        IMarket(_invMarket).deposit(0);
+        invEscrow = IInvEscrow(IMarket(_invMarket).predictEscrow(address(this)));
         invMarket = IMarket(_invMarket);
-        invEscrow = IInvEscrow(invMarket.createEscrow(address(this)));
         DBR = ERC20(IMarket(_invMarket).dbr());
         INV = ERC20(IMarket(_invMarket).collateral());
         gov = _gov;
@@ -89,8 +96,13 @@ contract sINV is ERC4626 {
         require(totalSupply >= MIN_SHARES, "Shares below MIN_SHARES");
         uint invBal = asset.balanceOf(address(this));
         if(invBal > minBuffer){
-            asset.transfer(address(invEscrow), invBal - minBuffer);
-            invEscrow.onDeposit();
+            if(address(invEscrow) == address(0)){
+                invMarket.deposit(invBal - minBuffer);
+                invEscrow = IInvEscrow(invMarket.predictEscrow(address(this)));
+            } else {
+                asset.transfer(address(invEscrow), invBal - minBuffer);
+                invEscrow.onDeposit();
+            }
         }
     }
 
@@ -144,10 +156,10 @@ contract sINV is ERC4626 {
         if(block.timestamp / period > lastBuy / period) {
             lastPeriodRevenue = periodRevenue;
             periodRevenue = newRevenue;
-            lastBuy = block.timestamp;
         } else {
             periodRevenue += newRevenue;
         }
+        lastBuy = block.timestamp;
     }
 
     /**
@@ -291,6 +303,7 @@ contract sINV is ERC4626 {
         pendingGov = address(0);
     }
 
+    //TODO: Is this function unnecessary as we send funds directly to escrow?
     /**
      * @dev Re-approves the asset token to be spent by the InvMarket contract.
      */

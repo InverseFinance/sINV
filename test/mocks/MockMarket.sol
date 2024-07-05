@@ -1,7 +1,9 @@
 pragma solidity ^0.8.21;
 
 import {MockEscrow} from "test/mocks/MockEscrow.sol";
-
+interface IERC20 {
+    function transferFrom(address, address, uint) external;
+}
 contract MockMarket {
 
     address public dbr;
@@ -13,8 +15,10 @@ contract MockMarket {
         collateral = _collateral;
     }
     
-    function createEscrow(address escrowOwner) external returns(address) {
-        escrow = new MockEscrow(escrowOwner, collateral, dbr);
+    function predictEscrow(address escrowOwner) external returns(address) {
+        if(address(escrow) == address(0)){
+            escrow = new MockEscrow(escrowOwner, collateral, dbr);
+        }
         return address(escrow);
     }
 
@@ -22,5 +26,13 @@ contract MockMarket {
         require(escrow.beneficiary() == msg.sender);
         escrow.pay(msg.sender, amount);
     }
+
+    function deposit(uint amount) external {
+        if(address(escrow) == address(0)){
+            escrow = new MockEscrow(msg.sender, collateral, dbr);
+        }
+        IERC20(collateral).transferFrom(msg.sender, address(escrow), amount);
+    }
+            
 
 }

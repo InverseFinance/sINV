@@ -4,34 +4,56 @@ pragma solidity 0.8.21;
 import {sINV} from "src/sInv.sol";
 import {sInvHelper} from "src/sInvHelper.sol";
 import {Test, console2} from "forge-std/Test.sol";
-import {MockMarket} from "test/mocks/MockMarket.sol";
-import {MockEscrow} from "test/mocks/MockEscrow.sol";
 import {Mintable} from "test/Mintable.sol";
 
-contract sINVTest is Test {
+interface IInvEscrow {
+    function onDeposit() external;
+    function balance() external view returns (uint);
+    function claimDBR() external;
+    function claimable() external view returns (uint);
+    function DBR() external view returns (address);
+}
 
-    Mintable inv;
-    Mintable dbr;
-    MockMarket invMarket;
-    MockEscrow invEscrow;
+interface IMarket {
+    function deposit(uint amount) external;
+    function withdraw(uint amount) external;
+    function dbr() external returns (address);
+    function collateral() external returns (address);
+    function predictEscrow(address user) external returns (address);
+}
+
+interface IMintable {
+    function mint(address to, uint amount) external;
+    function addMinter(address minter) external;
+}
+
+
+contract sINVForkTest is Test {
+
+    Mintable inv = Mintable(0x41D5D79431A913C4aE7d69a668ecdfE5fF9DFB68);
+    Mintable xinv = Mintable(0x1637e4e9941D55703a7A5E7807d6aDA3f7DCD61B);
+    Mintable dbr = Mintable(0xAD038Eb671c44b853887A7E32528FaB35dC5D710);
+    IMarket invMarket = IMarket(0xb516247596Ca36bf32876199FBdCaD6B3322330B);
+    IInvEscrow invEscrow;
     sINV sInv;
     sInvHelper helper;
-    address gov;
+    address gov = address(0x926dF14a23BE491164dCF93f4c468A50ef659D5B);
     address user = address(0xA);
     uint K = 10 ** 36;
     
     function setUp() public{
-        inv = new Mintable("Inverse Token", "INV");
-        dbr = new Mintable("Inv Borrowing Rights", "DBR");
-        invMarket = new MockMarket(address(dbr), address(inv));
+        string memory url = vm.rpcUrl("mainnet");
+        vm.createSelectFork(url);
         sInv = new sINV(address(inv), address(invMarket), gov, K);
-        invEscrow = MockEscrow(address(sInv.invEscrow()));
+        invEscrow = IInvEscrow(invMarket.predictEscrow(address(sInv)));
         helper = new sInvHelper(address(sInv));
+        vm.prank(gov);
+        IMintable(address(dbr)).addMinter(address(this));
     }
 
     function testDeposit() external {
         uint amount = 10 ** 18;
-        inv.mint(user, amount);
+        deal(address(inv), user, amount);
 
         vm.startPrank(user);
         inv.approve(address(sInv), amount);
@@ -39,13 +61,18 @@ contract sINVTest is Test {
         vm.stopPrank();
 
         assertEq(inv.balanceOf(user), 0, "user balance");
-        assertEq(sInv.totalAssets(), amount, "sInv totalAssets");
-        assertEq(inv.balanceOf(address(sInv.invEscrow())), amount, "escrow inv balance");
+        assertApproxEqAbs(sInv.totalAssets(), amount, 10, "sInv totalAssets");
+        if(amount < sInv.minBuffer()){
+            assertEq(inv.balanceOf(address(sInv)), amount, "sInv inv balance");
+        } else {
+            assert(address(sInv.invEscrow()) != address(0));
+            assertGt(xinv.balanceOf(address(sInv.invEscrow())), 0, "escrow xinv balance");
+        }
     }
 
     function testDeposit_withMinBalance() external {
         uint amount = 10 ** 18;
-        inv.mint(user, 2 * amount);
+        deal(address(inv), user, 2 * amount);
         vm.startPrank(gov);
         sInv.setMinBuffer(10 ** 18);
 
@@ -56,7 +83,7 @@ contract sINVTest is Test {
 
         assertEq(inv.balanceOf(user), amount, "User balance not equal amount after first deposit");
         assertEq(sInv.totalAssets(), amount, "sInv totalAssets not equal amount after first deposit");
-        assertEq(inv.balanceOf(address(sInv.invEscrow())), 0);
+        assertEq(xinv.balanceOf(address(sInv.invEscrow())), 0);
 
         vm.startPrank(user);
         inv.approve(address(sInv), amount);
@@ -64,13 +91,13 @@ contract sINVTest is Test {
         vm.stopPrank();
 
         assertEq(inv.balanceOf(user), 0, "User balance not equal 0 after second deposit");
-        assertEq(sInv.totalAssets(), 2 * amount, "sInv totalAssets not equal 2 x amount after second deposit");
-        assertEq(inv.balanceOf(address(sInv.invEscrow())), amount);
+        assertApproxEqAbs(sInv.totalAssets(), 2 * amount, 10, "sInv totalAssets not equal 2 x amount after second deposit");
+        assertGt(xinv.balanceOf(address(sInv.invEscrow())), 0);
     }
 
     function testDeposit_fail_createBelowMinShares() external {
-         uint amount = 10 ** 15;
-        inv.mint(user, amount);
+        uint amount = 10 ** 15;
+        deal(address(inv), user, amount);
 
         vm.startPrank(user);
         inv.approve(address(sInv), amount);
@@ -79,44 +106,44 @@ contract sINVTest is Test {
         vm.stopPrank();
     }
 
-    function testWithdraw() external {
+    function testRedeem() external {
         uint amount = 10 * 10 ** 18;
-        inv.mint(user, amount);
+        deal(address(inv), user, amount);
         vm.startPrank(user);
         inv.approve(address(sInv), amount);
         sInv.deposit(amount, user);
         vm.stopPrank();
 
         vm.startPrank(user);
-        sInv.withdraw(amount - sInv.MIN_SHARES(), user, user);
+        sInv.redeem(sInv.balanceOf(user) - sInv.MIN_SHARES(), user, user);
         vm.stopPrank();
 
-        assertEq(inv.balanceOf(user), amount - sInv.MIN_SHARES());
-        assertEq(sInv.totalAssets(), sInv.MIN_SHARES());
-        assertEq(inv.balanceOf(address(sInv.invEscrow())), sInv.MIN_SHARES());
+        assertApproxEqAbs(inv.balanceOf(user), amount - sInv.MIN_SHARES(), 10, "inv user balance");
+        assertApproxEqAbs(sInv.totalAssets(), sInv.MIN_SHARES(), 10, "sInv totalAssets");
+        assertGt(xinv.balanceOf(address(sInv.invEscrow())), 0);
     }
 
-    function testWithdraw_TimePassWithNoRevenue() external {
+    function testRedeem_TimePassWithNoRevenue() external {
         uint amount = 10 * 10 ** 18;
-        inv.mint(user, amount);
+        deal(address(inv), user, amount);
         vm.startPrank(user);
         inv.approve(address(sInv), amount);
         sInv.deposit(amount, user);
-        vm.warp(block.timestamp + 2 weeks);
+        vm.warp(block.timestamp + block.timestamp + 2 weeks);
         vm.stopPrank();
 
         vm.startPrank(user);
-        sInv.withdraw(amount - sInv.MIN_SHARES(), user, user);
+        sInv.redeem(sInv.balanceOf(address(user)) - sInv.MIN_SHARES(), user, user);
         vm.stopPrank();
 
-        assertEq(inv.balanceOf(user), amount - sInv.MIN_SHARES());
-        assertGt(sInv.totalAssets(), sInv.MIN_SHARES());
-        assertGt(inv.balanceOf(address(sInv.invEscrow())), sInv.MIN_SHARES());
+        assertApproxEqAbs(inv.balanceOf(user), amount - sInv.MIN_SHARES(), 10, "inv user balance");
+        assertGt(sInv.totalAssets(), sInv.MIN_SHARES(), "sInv totalAssets");
+        assertGt(xinv.balanceOf(address(sInv.invEscrow())), 0);
     }
 
     function testWithdraw_fail_belowMinShares() external {
         uint amount = 10 ** 18;
-        inv.mint(user, amount);
+        deal(address(inv), user, amount);
         vm.startPrank(user);
         inv.approve(address(sInv), amount);
         sInv.deposit(amount, user);
@@ -131,7 +158,7 @@ contract sINVTest is Test {
 
     function testWithdraw_fail_belowMinAssets() external {
         uint amount = 10 ** 18;
-        inv.mint(user, amount);
+        deal(address(inv), user, amount);
         vm.startPrank(user);
         inv.approve(address(sInv), amount);
         sInv.deposit(amount, user);
@@ -143,10 +170,13 @@ contract sINVTest is Test {
     }
 
     function test_buyDBRSingle() public {
-        vm.warp(7 days); // for totalAssets()
+        vm.prank(gov);
+        uint nextPeriodStart = block.timestamp + sInv.period() - block.timestamp % sInv.period();
+        vm.warp(nextPeriodStart);
         dbr.mint(address(sInv), 1e18);
         uint exactInvIn = 1 ether;
         uint exactDbrOut = helper.getDbrOut(exactInvIn);
+        vm.prank(gov);
         inv.mint(address(this), exactInvIn);
         inv.approve(address(sInv), exactInvIn);
         uint newDbrReserve = sInv.getDbrReserve() - exactDbrOut;
@@ -165,25 +195,29 @@ contract sINVTest is Test {
         assertEq(sInv.getInvReserve(), sInv.getK() / newDbrReserve, "inv reserve");
         assertEq(sInv.periodRevenue(), exactInvIn, "period revenue");
         assertEq(sInv.totalAssets(), 0, "total assets 0 days");
-        vm.warp(14 days);
-        assertEq(sInv.totalAssets(), 0, "total assets 14 days");
-        vm.warp(14 days + (7 days / 4));
-        assertApproxEqAbs(sInv.totalAssets(), exactInvIn / 4, 20, "total assets 16.25 days");
-        vm.warp(14 days + (7 days / 2));
-        assertApproxEqAbs(sInv.totalAssets(), exactInvIn / 2, 20, "total assets 17.5 days");
-        vm.warp(21 days);
+        vm.warp(nextPeriodStart + 3.5 days);
+        assertEq(sInv.totalAssets(), 0, "total assets 3.5 days");
+        vm.warp(nextPeriodStart + 7 days);
+        assertEq(sInv.totalAssets(), 0, "total assets 7 days");
+        vm.warp(nextPeriodStart + 7 days + (7 days / 4));
+        assertApproxEqAbs(sInv.totalAssets(), exactInvIn / 4, 20, "total assets 8.25 days");
+        vm.warp(nextPeriodStart + 7 days + (7 days / 2));
+        assertApproxEqAbs(sInv.totalAssets(), exactInvIn / 2, 20, "total assets 10.5 days");
+        vm.warp(nextPeriodStart + 14 days);
+        assertEq(sInv.totalAssets(), exactInvIn, "total assets 14 days");
+        vm.warp(nextPeriodStart + 15 days);
+        assertEq(sInv.totalAssets(), exactInvIn, "total assets 15 days");
+        vm.warp(nextPeriodStart + 21 days);
         assertEq(sInv.totalAssets(), exactInvIn, "total assets 21 days");
-        vm.warp(21 days + 1);
-        assertEq(sInv.totalAssets(), exactInvIn, "total assets 22 days");
-        vm.warp(28 days);
-        assertEq(sInv.totalAssets(), exactInvIn, "total assets 28 days");
     }
 
     function test_buyDBR(uint exactInvIn) public {
-        vm.warp(7 days); // for totalAssets()
+        uint nextPeriodStart = block.timestamp + sInv.period() - block.timestamp % sInv.period();
+        vm.warp(nextPeriodStart);
         dbr.mint(address(sInv), 1e18);
-        exactInvIn = bound(exactInvIn, 1, sInv.MAX_ASSETS());
+        exactInvIn = bound(exactInvIn, 1, 2**96-1 - inv.totalSupply());
         uint exactDbrOut = helper.getDbrOut(exactInvIn);
+        vm.prank(gov);
         inv.mint(address(this), exactInvIn);
         inv.approve(address(sInv), exactInvIn);
         uint newDbrReserve = sInv.getDbrReserve() - exactDbrOut;
@@ -195,25 +229,27 @@ contract sINVTest is Test {
         assertEq(sInv.getInvReserve(), sInv.getK() / newDbrReserve, "inv reserve");
         assertEq(sInv.periodRevenue(), exactInvIn, "period revenue");
         assertEq(sInv.totalAssets(), 0, "total assets");
-        vm.warp(14 days);
-        assertEq(sInv.totalAssets(), 0, "total assets 14 days");
-        vm.warp(14 days + (7 days / 4));
-        assertApproxEqAbs(sInv.totalAssets(), exactInvIn / 4, 20, "total assets 16.25 days");
-        vm.warp(14 days + (7 days / 2));
-        assertApproxEqAbs(sInv.totalAssets(), exactInvIn / 2, 20, "total assets 17.5 days");
-        vm.warp(21 days);
+        vm.warp(nextPeriodStart + 7 days);
+        assertEq(sInv.totalAssets(), 0, "total assets 7 days");
+        vm.warp(nextPeriodStart + 7 days + (7 days / 4));
+        assertApproxEqAbs(sInv.totalAssets(), exactInvIn / 4, 20, "total assets 8.25 days");
+        vm.warp(nextPeriodStart + 7 days + (7 days / 2));
+        assertApproxEqAbs(sInv.totalAssets(), exactInvIn / 2, 20, "total assets 10.5 days");
+        vm.warp(nextPeriodStart + 14 days);
+        assertEq(sInv.totalAssets(), exactInvIn, "total assets 14 days");
+        vm.warp(nextPeriodStart + 14 days + 1);
+        assertEq(sInv.totalAssets(), exactInvIn, "total assets 15 days");
+        vm.warp(nextPeriodStart + 21 days);
         assertEq(sInv.totalAssets(), exactInvIn, "total assets 21 days");
-        vm.warp(21 days + 1);
-        assertEq(sInv.totalAssets(), exactInvIn, "total assets 22 days");
-        vm.warp(28 days);
-        assertEq(sInv.totalAssets(), exactInvIn, "total assets 28 days");
     }
 
     function test_buyDBR(uint exactInvIn, uint exactDbrOut) public {
-        vm.warp(7 days); // for totalAssets()
+        uint nextPeriodStart = block.timestamp + sInv.period() - block.timestamp % sInv.period();
+        vm.warp(nextPeriodStart);
         dbr.mint(address(sInv), 1e18);
-        exactInvIn = bound(exactInvIn, 1, sInv.MAX_ASSETS());
+        exactInvIn = bound(exactInvIn, 1, 2**96-1 - inv.totalSupply());
         exactDbrOut = bound(exactDbrOut, 0, 1e18);
+        vm.prank(gov);
         inv.mint(address(this), exactInvIn);
         inv.approve(address(sInv), exactInvIn);
         uint _K = sInv.getK();
@@ -232,18 +268,18 @@ contract sINVTest is Test {
             assertEq(sInv.getInvReserve(), sInv.getK() / newDbrReserve, "inv reserve");
             assertEq(sInv.periodRevenue(), exactInvIn, "period revenue");
             assertEq(sInv.totalAssets(), 0, "total assets");
-            vm.warp(14 days);
-            assertEq(sInv.totalAssets(), 0, "total assets 14 days");
-            vm.warp(14 days + (7 days / 4));
+            vm.warp(nextPeriodStart + 7 days);
+            assertEq(sInv.totalAssets(), 0, "total assets 7 days");
+            vm.warp(nextPeriodStart + 7 days + (7 days / 4));
             if(exactInvIn > sInv.MAX_ASSETS()) exactInvIn = sInv.MAX_ASSETS();
-            assertApproxEqAbs(sInv.totalAssets(), exactInvIn / 4, 20, "total assets 16.25 days");
-            vm.warp(14 days + (7 days / 2));
-            assertApproxEqAbs(sInv.totalAssets(), exactInvIn / 2, 20, "total assets 17.5 days");
-            vm.warp(21 days);
+            assertApproxEqAbs(sInv.totalAssets(), exactInvIn / 4, 20, "total assets 8.25 days");
+            vm.warp(nextPeriodStart + 7 days + (7 days / 2));
+            assertApproxEqAbs(sInv.totalAssets(), exactInvIn / 2, 20, "total assets 10.5 days");
+            vm.warp(nextPeriodStart + 14 days);
             assertEq(sInv.totalAssets(), exactInvIn, "total assets 21 days");
-            vm.warp(21 days + 1);
-            assertEq(sInv.totalAssets(), exactInvIn, "total assets 22 days");
-            vm.warp(28 days);
+            vm.warp(nextPeriodStart + 14 days + 1);
+            assertEq(sInv.totalAssets(), exactInvIn, "total assets 14 days + 1");
+            vm.warp(nextPeriodStart + 28 days);
             assertEq(sInv.totalAssets(), exactInvIn, "total assets 28 days");
         }
     }
@@ -253,31 +289,30 @@ contract sINVTest is Test {
         inv.approve(address(invMarket), 0);
         assertEq(inv.allowance(address(sInv), address(invMarket)), 0);
         sInv.reapprove();
-        assertEq(inv.allowance(address(sInv), address(invMarket)), type(uint).max);
+        assertEq(inv.allowance(address(sInv), address(invMarket)), 2**96-1);
     }
 
     function test_getK() public {
-        vm.warp(7 days);
         assertEq(sInv.getK(), K);
         vm.prank(gov);
         sInv.setTargetK(3 * K);
-        assertEq(sInv.getK(), K);
-        vm.warp(10.5 days);
-        assertEq(sInv.getK(), 2 * K);
-        vm.warp(14 days);
+        assertEq(sInv.getK(), K, "not eq after 0 seconds");
+        vm.warp(block.timestamp + 3.5 days);
+        assertEq(sInv.getK(), 2 * K, "not 2 x after 3.5 days");
+        vm.warp(block.timestamp + 7 days);
         assertEq(sInv.getK(), 3 * K);
-        vm.warp(21 days);
+        vm.warp(block.timestamp + 21 days);
         assertEq(sInv.getK(), 3 * K);
     }
 
     function test_totalAssets(uint amount) public {
-        //vm.warp(7 days); // for totalAssets()
-        amount = bound(amount, sInv.convertToAssets(sInv.MIN_SHARES()), sInv.MAX_ASSETS());
+        amount = bound(amount, sInv.convertToAssets(sInv.MIN_SHARES()), uint(2**96-1) - inv.totalSupply());
         assertEq(sInv.totalAssets(), 0);
+        vm.prank(gov);
         inv.mint(address(this), amount);
         inv.approve(address(sInv), amount);
         sInv.deposit(amount, address(this));
-        assertEq(sInv.totalAssets(), amount);
+        assertApproxEqAbs(sInv.totalAssets(), amount, 10, "sInv totalAssets");
     }
 
 
