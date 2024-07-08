@@ -31,6 +31,10 @@ interface IDistributor {
     function claimable(address) external view returns(uint);
 }
 
+interface IFlashSwapIntegrator {
+    function flashSwapCallback(bytes calldata data) external;
+}
+
 /**
  * @title sINV
  * @dev Auto-compounding ERC4626 wrapper for asset FiRM deposits utilizing xy=k auctions.
@@ -265,7 +269,7 @@ contract sINV is ERC4626 {
      * @param exactDbrOut The exact amount of DBR to receive.
      * @param to The address that will receive the DBR.
      */
-    function flashBuyDBR(uint exactInvIn, uint exactDbrOut, address to) external {
+    function flashBuyDBR(uint exactInvIn, uint exactDbrOut, address to, bytes calldata data) external {
         //TODO: Implement reentracy guards for buy functions
         uint DBRBalance = getDbrReserve();
         if(exactDbrOut > DBR.balanceOf(address(this))){
@@ -278,7 +282,7 @@ contract sINV is ERC4626 {
         uint sharesBefore = totalSupply;
         require(invReserve * DBRReserve >= k, "Invariant");
         DBR.transfer(to, exactDbrOut);
-        to.call("");
+        IFlashSwapIntegrator(to).flashSwapCallback(data);
         //TODO: Make sure there's no way to increase invBalance, in which the flash buyer can immediately withdraw
         require(invBal + exactInvIn <= asset.balanceOf(address(this)), "Failed flash buy");
         require(sharesBefore == totalSupply, "Failed flash buy");
