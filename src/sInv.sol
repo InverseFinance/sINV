@@ -100,13 +100,8 @@ contract sINV is ERC4626 {
         require(totalSupply >= MIN_SHARES, "Shares below MIN_SHARES");
         uint invBal = asset.balanceOf(address(this));
         if(invBal > minBuffer){
-            if(address(invEscrow) == address(0)){
-                invMarket.deposit(invBal - minBuffer);
-                invEscrow = IInvEscrow(invMarket.predictEscrow(address(this)));
-            } else {
-                asset.transfer(address(invEscrow), invBal - minBuffer);
-                invEscrow.onDeposit();
-            }
+            asset.transfer(address(invEscrow), invBal - minBuffer);
+            invEscrow.onDeposit();
         }
     }
 
