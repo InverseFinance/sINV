@@ -3,7 +3,7 @@ pragma solidity 0.8.21;
 
 import {sINV, IERC20} from "src/sInv.sol";
 import {sInvHelper} from "src/sInvHelper.sol";
-import {SimpleArb, EvilArb} from "src/simpleArb.sol";
+import {SimpleArb, EmptyArb, ReentrantArb} from "src/simpleArb.sol";
 import {Test, console2} from "forge-std/Test.sol";
 import {Mintable} from "test/Mintable.sol";
 
@@ -39,7 +39,6 @@ contract sINVArbForkTest is Test {
     IInvEscrow invEscrow;
     sINV sInv;
     SimpleArb simpleArb;
-    EvilArb evilArb;
     sInvHelper helper;
     address gov = address(0x926dF14a23BE491164dCF93f4c468A50ef659D5B);
     address user = address(0xA);
@@ -50,7 +49,6 @@ contract sINVArbForkTest is Test {
         vm.createSelectFork(url);
         sInv = new sINV(address(inv), address(invMarket), gov, K);
         simpleArb = new SimpleArb(address(sInv));
-        evilArb = new EvilArb(address(sInv));
         invEscrow = IInvEscrow(invMarket.predictEscrow(address(sInv)));
         helper = new sInvHelper(address(sInv));
         vm.prank(gov);
@@ -109,14 +107,28 @@ contract sINVArbForkTest is Test {
     }
 
     function test_flashArb_fails_noRepayment() public {
+        EmptyArb evilArb = new EmptyArb(address(sInv));
         vm.prank(gov);
         dbr.mint(address(sInv), 1e21 * 5);
         vm.prank(gov);
-        deal(address(weth), address(simpleArb), 1 ether);
+        deal(address(weth), address(evilArb), 1 ether);
         int expectedRevenue = evilArb.getRevenue(0.02 ether);
         uint invIn = evilArb.wethToInv(0.02 ether);
         vm.expectRevert();
         evilArb.flashArb(invIn, uint(expectedRevenue) * 9 / 10);
     }
 
+    function test_flashArb_fails_reentrantPurchase() public {
+        ReentrantArb reentrantArb = new ReentrantArb(address(sInv));
+        dbr.mint(address(sInv), 1e21 * 5);
+        uint exactInvIn = 1 ether;
+        vm.prank(gov);
+        inv.mint(address(reentrantArb), exactInvIn);
+        int expectedRevenue = reentrantArb.getRevenueInv(exactInvIn);
+        uint initialBal = inv.balanceOf(address(reentrantArb));
+        console2.log("Initial bal:", initialBal);
+        vm.expectRevert("Invariant");
+        reentrantArb.flashArbInv(exactInvIn, uint(expectedRevenue) * 9 / 10);
+        console2.log("Inverse bal after:", inv.balanceOf(address(reentrantArb)));
+    }
 }

@@ -114,7 +114,7 @@ contract SimpleArb {
 
 }
 
-contract EvilArb is SimpleArb{
+contract EmptyArb is SimpleArb{
 
     constructor(address _sInv) SimpleArb(_sInv){
     
@@ -123,5 +123,20 @@ contract EvilArb is SimpleArb{
     function flashSwapCallback(bytes calldata data) external override {
         require(msg.sender == address(sInv));
         //Do nothing
+    }
+}
+
+contract ReentrantArb is SimpleArb{
+
+    constructor(address _sInv) SimpleArb(_sInv){
+    
+    }
+
+    function flashSwapCallback(bytes calldata data) external override {
+        require(msg.sender == address(sInv));
+        uint invOwed = abi.decode(data, (uint));
+        uint dbrOut = getDbrOut(invOwed);
+        sInv.buyDBR(invOwed, dbrOut, address(this));
+        dbrTriPool.exchange(dbrIndex, invIndex, dbrOut, 0);
     }
 }
