@@ -31,6 +31,10 @@ interface IDistributor {
     function claimable(address) external view returns(uint);
 }
 
+interface IFlashSwapIntegrator {
+    function flashSwapCallback(bytes calldata data) external;
+}
+
 /**
  * @title sINV
  * @dev Auto-compounding ERC4626 wrapper for asset FiRM deposits utilizing xy=k auctions.
@@ -72,7 +76,7 @@ contract sINV is ERC4626 {
         uint _K
     ) ERC4626(ERC20(_inv), "Staked Inv", "sasset") {
         require(_K > 0, "_K must be positive");
-        IMarket(_invMarket).deposit(0);
+        IMarket(_invMarket).deposit(0); //creates an escrow on behalf of the sINV contract
         invEscrow = IInvEscrow(IMarket(_invMarket).predictEscrow(address(this)));
         invMarket = IMarket(_invMarket);
         DBR = ERC20(IMarket(_invMarket).dbr());
@@ -96,13 +100,8 @@ contract sINV is ERC4626 {
         require(totalSupply >= MIN_SHARES, "Shares below MIN_SHARES");
         uint invBal = asset.balanceOf(address(this));
         if(invBal > minBuffer){
-            if(address(invEscrow) == address(0)){
-                invMarket.deposit(invBal - minBuffer);
-                invEscrow = IInvEscrow(invMarket.predictEscrow(address(this)));
-            } else {
-                asset.transfer(address(invEscrow), invBal - minBuffer);
-                invEscrow.onDeposit();
-            }
+            asset.transfer(address(invEscrow), invBal - minBuffer);
+            invEscrow.onDeposit();
         }
     }
 
@@ -142,7 +141,6 @@ contract sINV is ERC4626 {
             _lastPeriodRevenue = periodRevenue;
             _periodRevenue = 0;
         }
-        //TODO: Inspect this more thoroughly
         uint remainingLastRevenue = _lastPeriodRevenue * (period - block.timestamp % period) / period;
         uint lockedRevenue = remainingLastRevenue + _periodRevenue;
         uint actualAssets;
@@ -241,7 +239,6 @@ contract sINV is ERC4626 {
      * @param to The address that will receive the DBR.
      */
     function buyDBR(uint exactInvIn, uint exactDbrOut, address to) external {
-        //TODO: Implement reentracy guard if keeping flashBuyDBR function
         require(to != address(0), "Zero address");
         uint DBRBalance = getDbrReserve();
         if(exactDbrOut > DBR.balanceOf(address(this))){
@@ -265,8 +262,7 @@ contract sINV is ERC4626 {
      * @param exactDbrOut The exact amount of DBR to receive.
      * @param to The address that will receive the DBR.
      */
-    function flashBuyDBR(uint exactInvIn, uint exactDbrOut, address to) external {
-        //TODO: Implement reentracy guards for buy functions
+    function flashBuyDBR(uint exactInvIn, uint exactDbrOut, address to, bytes calldata data) external {
         uint DBRBalance = getDbrReserve();
         if(exactDbrOut > DBR.balanceOf(address(this))){
             invEscrow.claimDBR();
@@ -277,12 +273,12 @@ contract sINV is ERC4626 {
         uint invBal = asset.balanceOf(address(this));
         uint sharesBefore = totalSupply;
         require(invReserve * DBRReserve >= k, "Invariant");
+        updatePeriodRevenue(exactInvIn);
         DBR.transfer(to, exactDbrOut);
-        to.call("");
+        IFlashSwapIntegrator(to).flashSwapCallback(data);
         //TODO: Make sure there's no way to increase invBalance, in which the flash buyer can immediately withdraw
         require(invBal + exactInvIn <= asset.balanceOf(address(this)), "Failed flash buy");
         require(sharesBefore == totalSupply, "Failed flash buy");
-        updatePeriodRevenue(exactInvIn);
         emit Buy(msg.sender, to, exactInvIn, exactDbrOut);
     }
 
@@ -301,14 +297,6 @@ contract sINV is ERC4626 {
         require(msg.sender == pendingGov, "ONLY PENDINGGOV");
         gov = pendingGov;
         pendingGov = address(0);
-    }
-
-    //TODO: Is this function unnecessary as we send funds directly to escrow?
-    /**
-     * @dev Re-approves the asset token to be spent by the InvMarket contract.
-     */
-    function reapprove() external {
-        asset.approve(address(invMarket), type(uint).max);
     }
 
     /**
