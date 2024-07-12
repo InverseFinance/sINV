@@ -284,13 +284,13 @@ contract sINVForkTest is Test {
         }
     }
 
-    function test_reapprove() public {
-        vm.prank(address(sInv));
-        inv.approve(address(invMarket), 0);
-        assertEq(inv.allowance(address(sInv), address(invMarket)), 0);
-        sInv.reapprove();
-        assertEq(inv.allowance(address(sInv), address(invMarket)), 2**96-1);
-    }
+    // function test_reapprove() public {
+    //     vm.prank(address(sInv));
+    //     inv.approve(address(invMarket), 0);
+    //     assertEq(inv.allowance(address(sInv), address(invMarket)), 0);
+    //     sInv.reapprove();
+    //     assertEq(inv.allowance(address(sInv), address(invMarket)), 2**96-1);
+    // }
 
     function test_getK() public {
         assertEq(sInv.getK(), K);

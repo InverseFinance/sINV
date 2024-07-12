@@ -43,7 +43,7 @@ interface IFlashSwapIntegrator {
  */
 contract sINV is ERC4626 {
     
-    uint public constant MIN_ASSETS = 10**16; // 1 cent
+    uint256 public constant MIN_ASSETS = 10**16; // 1 cent
     uint public constant MIN_SHARES = 10**18;
     uint public constant MAX_ASSETS = 10**32; // 100 trillion asset
     uint public period = 7 days;
