@@ -2,7 +2,7 @@
 pragma solidity 0.8.21;
 
 import "lib/solmate/src/tokens/ERC4626.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 interface IInvEscrow {
     function onDeposit() external;
@@ -42,7 +42,7 @@ interface IFlashSwapIntegrator {
  * WARNING: While this vault is safe to be used as collateral in lending markets, it should not be allowed as a borrowable asset.
  * Any protocol in which sudden, large and atomic increases in the value of an asset may be a security risk should not integrate this vault.
  */
-contract sINV is ERC4626 {
+contract sINV is ERC4626, ReentrancyGuard {
     
     uint256 public constant MIN_ASSETS = 10**16; // 1 cent
     uint256 public constant MIN_SHARES = 10**18;
@@ -95,9 +95,8 @@ contract sINV is ERC4626 {
 
     /**
      * @dev Hook that is called after tokens are deposited into the contract.
-     * @param assets The amount of assets that were deposited.
      */    
-    function afterDeposit(uint256 assets, uint256) internal override {
+    function afterDeposit(uint256, uint256) internal override {
         require(totalSupply >= MIN_SHARES, "Shares below MIN_SHARES");
         uint256 invBal = asset.balanceOf(address(this));
         if(invBal > minBuffer){
@@ -239,7 +238,7 @@ contract sINV is ERC4626 {
      * @param exactDbrOut The exact amount of DBR to receive.
      * @param to The address that will receive the DBR.
      */
-    function buyDBR(uint256 exactInvIn, uint256 exactDbrOut, address to) external {
+    function buyDBR(uint256 exactInvIn, uint256 exactDbrOut, address to) external nonReentrant {
         require(to != address(0), "Zero address");
         uint256 DBRBalance = getDbrReserve();
         if(exactDbrOut > DBR.balanceOf(address(this))){
@@ -257,13 +256,13 @@ contract sINV is ERC4626 {
 
     /**
      * @dev Allows users to buy DBR with asset.
-     * WARNING: Never expose this directly to a UI as it's likely to cause a loss unless a transaction is executed immediately.
+     * WARNING: Never expose this directly to a UI as it is likely to cause a loss unless a transaction is executed immediately.
      * Instead use the sINVHelper function or custom smart contract code.
      * @param exactInvIn The exact amount of asset to spend.
      * @param exactDbrOut The exact amount of DBR to receive.
      * @param to The address that will receive the DBR.
      */
-    function flashBuyDBR(uint256 exactInvIn, uint256 exactDbrOut, address to, bytes calldata data) external {
+    function flashBuyDBR(uint256 exactInvIn, uint256 exactDbrOut, address to, bytes calldata data) external nonReentrant {
         uint256 DBRBalance = getDbrReserve();
         if(exactDbrOut > DBR.balanceOf(address(this))){
             invEscrow.claimDBR();
