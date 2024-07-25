@@ -6,6 +6,7 @@ import {sInvHelper} from "src/sInvHelper.sol";
 import {SimpleArb, EmptyArb, ReentrantArb} from "src/simpleArb.sol";
 import {Test, console2} from "forge-std/Test.sol";
 import {Mintable} from "test/Mintable.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 interface IInvEscrow {
     function onDeposit() external;
@@ -125,10 +126,9 @@ contract sINVArbForkTest is Test {
         vm.prank(gov);
         inv.mint(address(reentrantArb), exactInvIn);
         int expectedRevenue = reentrantArb.getRevenueInv(exactInvIn);
-        uint initialBal = inv.balanceOf(address(reentrantArb));
-        console2.log("Initial bal:", initialBal);
-        vm.expectRevert("Invariant");
+        vm.expectRevert(
+            abi.encodeWithSelector(ReentrancyGuard.ReentrancyGuardReentrantCall.selector)
+        );
         reentrantArb.flashArbInv(exactInvIn, uint(expectedRevenue) * 9 / 10);
-        console2.log("Inverse bal after:", inv.balanceOf(address(reentrantArb)));
     }
 }
