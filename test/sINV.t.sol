@@ -74,7 +74,9 @@ contract sINVTest is Test {
 
         vm.startPrank(user);
         inv.approve(address(sInv), amount);
-        vm.expectRevert("Shares below MIN_SHARES");
+        vm.expectRevert(
+            sINV.BelowMinShares.selector
+        );
         sInv.deposit(amount, user);
         vm.stopPrank();
     }
@@ -124,7 +126,9 @@ contract sINVTest is Test {
 
         vm.startPrank(user);
         uint minShares = sInv.MIN_SHARES();
-        vm.expectRevert("Shares below MIN_SHARES");
+        vm.expectRevert(
+            sINV.BelowMinShares.selector
+        );
         sInv.withdraw(amount + 1 - minShares, user, user);
         vm.stopPrank();
     }
@@ -138,7 +142,9 @@ contract sINVTest is Test {
         vm.stopPrank();
 
         vm.prank(user);
-        vm.expectRevert("Insufficient assets");
+        vm.expectRevert(
+            sINV.InsufficientAssets.selector
+        );
         sInv.withdraw(amount, user, user);
     }
 
@@ -159,7 +165,6 @@ contract sINVTest is Test {
             assertEq(invEscrow.claimable(), 0, "Not all DBR claimed");
         }
         assertEq(inv.balanceOf(address(this)), 0, "inv balance");
-        //assertEq(savings.balanceOf(address(sInv)), exactInvIn, "savings balance");
         assertEq(dbr.balanceOf(address(1)), exactDbrOut, "dbr balance");
         assertEq(sInv.getDbrReserve(), newDbrReserve, "dbr reserve");
         assertEq(sInv.getInvReserve(), sInv.getK() / newDbrReserve, "inv reserve");
@@ -189,7 +194,6 @@ contract sINVTest is Test {
         uint newDbrReserve = sInv.getDbrReserve() - exactDbrOut;
         sInv.buyDBR(exactInvIn, exactDbrOut, address(1));
         assertEq(inv.balanceOf(address(this)), 0, "inv balance");
-        //assertEq(savings.balanceOf(address(sInv)), exactInvIn, "savings balance");
         assertEq(dbr.balanceOf(address(1)), exactDbrOut, "dbr balance");
         assertEq(sInv.getDbrReserve(), newDbrReserve, "dbr reserve");
         assertEq(sInv.getInvReserve(), sInv.getK() / newDbrReserve, "inv reserve");
@@ -221,7 +225,9 @@ contract sINVTest is Test {
         uint newInvReserve = sInv.getInvReserve() + exactInvIn;
         uint newK = newInvReserve * newDbrReserve;
         if(newK < _K) {
-            vm.expectRevert("Invariant");
+            vm.expectRevert(
+                sINV.Invariant.selector
+            );
             sInv.buyDBR(exactInvIn, exactDbrOut, address(1));
         } else {
             sInv.buyDBR(exactInvIn, exactDbrOut, address(1));
@@ -276,7 +282,9 @@ contract sINVTest is Test {
     // GOV GATED FUNCTIONS //
 
     function testSetTargetK() external {
-        vm.expectRevert("ONLY GOV");
+        vm.expectRevert(
+            abi.encodeWithSelector(sINV.OnlyGov.selector)
+        );
         sInv.setTargetK(1e40);
 
         assertEq(sInv.targetK(), K, "Target K not equal constructor supplied K");
@@ -289,7 +297,9 @@ contract sINVTest is Test {
     }
 
     function testSetMinBuffer() external {
-        vm.expectRevert("ONLY GOV");
+        vm.expectRevert(
+            abi.encodeWithSelector(sINV.OnlyGov.selector)
+        );
         sInv.setMinBuffer(1);
 
         assertEq(sInv.minBuffer(), 0);
@@ -299,7 +309,9 @@ contract sINVTest is Test {
     }
 
     function testSetPeriod() external {
-        vm.expectRevert("ONLY GOV");
+        vm.expectRevert(
+            abi.encodeWithSelector(sINV.OnlyGov.selector)
+        );
         sInv.setPeriod(1 days);
 
         assertEq(sInv.period(), 7 days);
@@ -311,7 +323,9 @@ contract sINVTest is Test {
     /// AUTH ///
 
     function testSetPendingGov() external {
-        vm.expectRevert("ONLY GOV");
+        vm.expectRevert(
+            abi.encodeWithSelector(sINV.OnlyGov.selector)
+        );
         sInv.setPendingGov(user);
 
         assertEq(sInv.pendingGov(), address(0));
@@ -321,7 +335,9 @@ contract sINVTest is Test {
     }
 
     function testAcceptPendingGov() external {
-        vm.expectRevert("ONLY PENDINGGOV");
+        vm.expectRevert(
+            abi.encodeWithSelector(sINV.OnlyPendingGov.selector)
+        );
         sInv.acceptGov();
         vm.prank(gov);
         sInv.setPendingGov(user);

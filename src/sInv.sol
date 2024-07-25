@@ -62,6 +62,15 @@ contract sINV is ERC4626, ReentrancyGuard {
     uint256 public lastPeriodRevenue;
     uint256 public lastBuy;
 
+    error OnlyGov();
+    error OnlyPendingGov();
+    error KTooLow(uint k, uint limit);
+    error BelowMinShares();
+    error InsufficientAssets();
+    error Invariant();
+    error FailedFlashBuy();
+    error UnauthorizedTokenWithdrawal();
+
     /**
      * @dev Constructor for sINV contract.
      * WARNING: MIN_SHARES will always be unwithdrawable from the vault. Deployer should deposit enough to mint MIN_SHARES to avoid causing user grief.
@@ -76,7 +85,7 @@ contract sINV is ERC4626, ReentrancyGuard {
         address _gov,
         uint256 _K
     ) ERC4626(ERC20(_inv), "Staked Inv", "sINV") {
-        require(_K > 0, "_K must be positive");
+        if(_K == 0) revert KTooLow(_K, 1);
         IMarket(_invMarket).deposit(0); //creates an escrow on behalf of the sINV contract
         invEscrow = IInvEscrow(IMarket(_invMarket).predictEscrow(address(this)));
         invMarket = IMarket(_invMarket);
@@ -89,7 +98,12 @@ contract sINV is ERC4626, ReentrancyGuard {
     }
 
     modifier onlyGov() {
-        require(msg.sender == gov, "ONLY GOV");
+        if(msg.sender != gov) revert OnlyGov();
+        _;
+    }
+
+    modifier onlyPendingGov() {
+        if(msg.sender != pendingGov) revert OnlyPendingGov();
         _;
     }
 
@@ -97,7 +111,7 @@ contract sINV is ERC4626, ReentrancyGuard {
      * @dev Hook that is called after tokens are deposited into the contract.
      */    
     function afterDeposit(uint256, uint256) internal override {
-        require(totalSupply >= MIN_SHARES, "Shares below MIN_SHARES");
+        if(totalSupply < MIN_SHARES) revert BelowMinShares();
         uint256 invBal = asset.balanceOf(address(this));
         if(invBal > minBuffer){
             asset.transfer(address(invEscrow), invBal - minBuffer);
@@ -112,8 +126,8 @@ contract sINV is ERC4626, ReentrancyGuard {
      */
     function beforeWithdraw(uint256 assets, uint256 shares) internal override {
         uint256 _totalAssets = totalAssets();
-        require(totalAssets() >= assets + MIN_ASSETS, "Insufficient assets");
-        require(totalSupply >= shares + MIN_SHARES, "Shares below MIN_SHARES");
+        if(totalAssets() < assets + MIN_ASSETS) revert InsufficientAssets();
+        if(totalSupply < shares + MIN_SHARES) revert BelowMinShares();
         uint256 invBal = asset.balanceOf(address(this));
         if(assets > invBal) {
             uint256 withdrawAmount = assets - invBal + minBuffer;
@@ -204,7 +218,7 @@ contract sINV is ERC4626, ReentrancyGuard {
      * @param _K The new target K value.
      */
     function setTargetK(uint256 _K) external onlyGov {
-        require(_K > getDbrReserve(), "K must be larger than DBR reserve");
+        if(_K < getDbrReserve()) revert KTooLow(_K, getDbrReserve());
         prevK = getK();
         targetK = _K;
         lastKUpdate = block.timestamp;
@@ -239,7 +253,6 @@ contract sINV is ERC4626, ReentrancyGuard {
      * @param to The address that will receive the DBR.
      */
     function buyDBR(uint256 exactInvIn, uint256 exactDbrOut, address to) external nonReentrant {
-        require(to != address(0), "Zero address");
         uint256 DBRBalance = getDbrReserve();
         if(exactDbrOut > DBR.balanceOf(address(this))){
             invEscrow.claimDBR();
@@ -247,7 +260,7 @@ contract sINV is ERC4626, ReentrancyGuard {
         uint256 k = getK();
         uint256 DBRReserve = DBRBalance - exactDbrOut;
         uint256 invReserve = k / DBRBalance + exactInvIn;
-        require(invReserve * DBRReserve >= k, "Invariant");
+        if(invReserve * DBRReserve < k) revert Invariant();
         updatePeriodRevenue(exactInvIn);
         INV.transferFrom(msg.sender, address(this), exactInvIn);
         DBR.transfer(to, exactDbrOut);
@@ -272,13 +285,12 @@ contract sINV is ERC4626, ReentrancyGuard {
         uint256 invReserve = k / DBRBalance + exactInvIn;
         uint256 invBal = asset.balanceOf(address(this));
         uint256 sharesBefore = totalSupply;
-        require(invReserve * DBRReserve >= k, "Invariant");
+        if(invReserve * DBRReserve < k) revert Invariant();
         updatePeriodRevenue(exactInvIn);
         DBR.transfer(to, exactDbrOut);
         IFlashSwapIntegrator(to).flashSwapCallback(data);
-        //TODO: Make sure there's no way to increase invBalance, in which the flash buyer can immediately withdraw
-        require(invBal + exactInvIn <= asset.balanceOf(address(this)), "Failed flash buy");
-        require(sharesBefore == totalSupply, "Failed flash buy");
+        if(invBal + exactInvIn > asset.balanceOf(address(this))) revert FailedFlashBuy();
+        if(sharesBefore != totalSupply) revert FailedFlashBuy();
         emit Buy(msg.sender, to, exactInvIn, exactDbrOut);
     }
 
@@ -293,8 +305,7 @@ contract sINV is ERC4626, ReentrancyGuard {
     /**
      * @dev Allows the pending governance to accept its role.
      */
-    function acceptGov() external {
-        require(msg.sender == pendingGov, "ONLY PENDINGGOV");
+    function acceptGov() external onlyPendingGov {
         gov = pendingGov;
         pendingGov = address(0);
     }
@@ -307,8 +318,9 @@ contract sINV is ERC4626, ReentrancyGuard {
      * @param to The recipient address of the swept tokens.
      */
     function sweep(address token, uint256 amount, address to) public onlyGov {
-        require(address(DBR) != token, "Not authorized");
-        require(address(asset) != token, "Not authorized");
+        if(address(DBR) == token ||
+            address(asset) == token)
+            revert UnauthorizedTokenWithdrawal();
         IERC20(token).transfer(to, amount);
     }
 

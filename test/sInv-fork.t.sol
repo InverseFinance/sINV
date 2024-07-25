@@ -101,7 +101,7 @@ contract sINVForkTest is Test {
 
         vm.startPrank(user);
         inv.approve(address(sInv), amount);
-        vm.expectRevert("Shares below MIN_SHARES");
+        vm.expectRevert(sINV.BelowMinShares.selector);
         sInv.deposit(amount, user);
         vm.stopPrank();
     }
@@ -151,7 +151,7 @@ contract sINVForkTest is Test {
 
         vm.startPrank(user);
         uint minShares = sInv.MIN_SHARES();
-        vm.expectRevert("Shares below MIN_SHARES");
+        vm.expectRevert(sINV.BelowMinShares.selector);
         sInv.withdraw(amount + 1 - minShares, user, user);
         vm.stopPrank();
     }
@@ -165,7 +165,7 @@ contract sINVForkTest is Test {
         vm.stopPrank();
 
         vm.prank(user);
-        vm.expectRevert("Insufficient assets");
+        vm.expectRevert(sINV.InsufficientAssets.selector);
         sInv.withdraw(amount, user, user);
     }
 
@@ -257,7 +257,7 @@ contract sINVForkTest is Test {
         uint newInvReserve = sInv.getInvReserve() + exactInvIn;
         uint newK = newInvReserve * newDbrReserve;
         if(newK < _K) {
-            vm.expectRevert("Invariant");
+            vm.expectRevert(sINV.Invariant.selector);
             sInv.buyDBR(exactInvIn, exactDbrOut, address(1));
         } else {
             sInv.buyDBR(exactInvIn, exactDbrOut, address(1));
@@ -311,7 +311,7 @@ contract sINVForkTest is Test {
     // GOV GATED FUNCTIONS //
 
     function testSetTargetK() external {
-        vm.expectRevert("ONLY GOV");
+        vm.expectRevert(sINV.OnlyGov.selector);
         sInv.setTargetK(1e40);
 
         assertEq(sInv.targetK(), K, "Target K not equal constructor supplied K");
@@ -324,7 +324,7 @@ contract sINVForkTest is Test {
     }
 
     function testSetMinBuffer() external {
-        vm.expectRevert("ONLY GOV");
+        vm.expectRevert(sINV.OnlyGov.selector);
         sInv.setMinBuffer(1);
 
         assertEq(sInv.minBuffer(), 0);
@@ -334,7 +334,7 @@ contract sINVForkTest is Test {
     }
 
     function testSetPeriod() external {
-        vm.expectRevert("ONLY GOV");
+        vm.expectRevert(sINV.OnlyGov.selector);
         sInv.setPeriod(1 days);
 
         assertEq(sInv.period(), 7 days);
@@ -346,7 +346,7 @@ contract sINVForkTest is Test {
     /// AUTH ///
 
     function testSetPendingGov() external {
-        vm.expectRevert("ONLY GOV");
+        vm.expectRevert(sINV.OnlyGov.selector);
         sInv.setPendingGov(user);
 
         assertEq(sInv.pendingGov(), address(0));
@@ -356,7 +356,7 @@ contract sINVForkTest is Test {
     }
 
     function testAcceptPendingGov() external {
-        vm.expectRevert("ONLY PENDINGGOV");
+        vm.expectRevert(sINV.OnlyPendingGov.selector);
         sInv.acceptGov();
         vm.prank(gov);
         sInv.setPendingGov(user);
