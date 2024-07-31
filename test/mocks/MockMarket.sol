@@ -8,6 +8,7 @@ contract MockMarket {
 
     address public dbr;
     address public collateral;
+    mapping(address => address) public escrows;
     MockEscrow escrow;
     
     constructor(address _dbr, address _collateral) {
@@ -18,6 +19,7 @@ contract MockMarket {
     function predictEscrow(address escrowOwner) external returns(address) {
         if(address(escrow) == address(0)){
             escrow = new MockEscrow(escrowOwner, collateral, dbr);
+            escrows[escrowOwner] = address(escrow);
         }
         return address(escrow);
     }
@@ -30,6 +32,7 @@ contract MockMarket {
     function deposit(uint amount) external {
         if(address(escrow) == address(0)){
             escrow = new MockEscrow(msg.sender, collateral, dbr);
+            escrows[msg.sender] = address(escrow);
         }
         IERC20(collateral).transferFrom(msg.sender, address(escrow), amount);
     }

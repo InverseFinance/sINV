@@ -20,6 +20,7 @@ interface IMarket {
     function dbr() external returns (address);
     function collateral() external returns (address);
     function predictEscrow(address user) external returns (address);
+    function escrows(address user) external returns (address);
 }
 
 interface IERC20 {
@@ -51,7 +52,6 @@ contract sINV is ERC4626, ReentrancyGuard {
     IMarket public immutable invMarket;
     IInvEscrow public invEscrow;
     ERC20 public immutable DBR;
-    ERC20 public immutable INV;
     address public gov;
     address public pendingGov;
     uint256 public minBuffer;
@@ -87,10 +87,9 @@ contract sINV is ERC4626, ReentrancyGuard {
     ) ERC4626(ERC20(_inv), "Staked Inv", "sINV") {
         if(_K == 0) revert KTooLow(_K, 1);
         IMarket(_invMarket).deposit(0); //creates an escrow on behalf of the sINV contract
-        invEscrow = IInvEscrow(IMarket(_invMarket).predictEscrow(address(this)));
+        invEscrow = IInvEscrow(IMarket(_invMarket).escrows(address(this)));
         invMarket = IMarket(_invMarket);
         DBR = ERC20(IMarket(_invMarket).dbr());
-        INV = ERC20(IMarket(_invMarket).collateral());
         gov = _gov;
         targetK = _K;
         prevK = _K;
@@ -145,7 +144,8 @@ contract sINV is ERC4626, ReentrancyGuard {
      * @return The total assets in the contract.
      */
     function totalAssets() public view override returns (uint) {
-        uint256 periodsSinceLastBuy = block.timestamp / period - lastBuy / period;
+        uint _period = period;
+        uint256 periodsSinceLastBuy = block.timestamp / _period - lastBuy / _period;
         uint256 _lastPeriodRevenue = lastPeriodRevenue;
         uint256 _periodRevenue = periodRevenue;
         uint256 invBal = invEscrow.balance() + asset.balanceOf(address(this));
@@ -155,7 +155,7 @@ contract sINV is ERC4626, ReentrancyGuard {
             _lastPeriodRevenue = periodRevenue;
             _periodRevenue = 0;
         }
-        uint256 remainingLastRevenue = _lastPeriodRevenue * (period - block.timestamp % period) / period;
+        uint256 remainingLastRevenue = _lastPeriodRevenue * (_period - block.timestamp % _period) / _period;
         uint256 lockedRevenue = remainingLastRevenue + _periodRevenue;
         uint256 actualAssets;
         if(invBal > lockedRevenue){
@@ -179,13 +179,13 @@ contract sINV is ERC4626, ReentrancyGuard {
      * @return The current value of K.
      */
     function getK() public view returns (uint) {
+        uint _period = period;
         uint256 timeElapsed = block.timestamp - lastKUpdate;
-        if(timeElapsed > period) {
+        if(timeElapsed > _period) {
             return targetK;
         }
-        uint256 targetWeight = timeElapsed;
-        uint256 prevWeight = period - timeElapsed;
-        return (prevK * prevWeight + targetK * targetWeight) / period;
+        uint256 prevWeight = _period - timeElapsed;
+        return (prevK * prevWeight + targetK * timeElapsed) / _period;
     }
 
     /**
@@ -262,7 +262,7 @@ contract sINV is ERC4626, ReentrancyGuard {
         uint256 invReserve = k / DBRBalance + exactInvIn;
         if(invReserve * DBRReserve < k) revert Invariant();
         updatePeriodRevenue(exactInvIn);
-        INV.transferFrom(msg.sender, address(this), exactInvIn);
+        asset.transferFrom(msg.sender, address(this), exactInvIn);
         DBR.transfer(to, exactDbrOut);
         emit Buy(msg.sender, to, exactInvIn, exactDbrOut);
     }
