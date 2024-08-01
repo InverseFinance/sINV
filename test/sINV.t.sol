@@ -308,18 +308,6 @@ contract sINVTest is Test {
         assertEq(sInv.minBuffer(), 1);
     }
 
-    function testSetPeriod() external {
-        vm.expectRevert(
-            abi.encodeWithSelector(sINV.OnlyGov.selector)
-        );
-        sInv.setPeriod(1 days);
-
-        assertEq(sInv.period(), 7 days);
-        vm.prank(gov);
-        sInv.setPeriod(1 days);
-        assertEq(sInv.period(), 1 days);
-    }
-
     /// AUTH ///
 
     function testSetPendingGov() external {

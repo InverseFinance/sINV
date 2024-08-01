@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT License
-pragma solidity 0.8.21;
+pragma solidity ^0.8.21;
 
 import "lib/solmate/src/tokens/ERC4626.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
@@ -48,9 +48,9 @@ contract sINV is ERC4626, ReentrancyGuard {
     uint256 public constant MIN_ASSETS = 10**16; // 1 cent
     uint256 public constant MIN_SHARES = 10**18;
     uint256 public constant MAX_ASSETS = 10**32; // 100 trillion asset
-    uint256 public period = 7 days;
+    uint256 public constant period = 7 days;
     IMarket public immutable invMarket;
-    IInvEscrow public invEscrow;
+    IInvEscrow public immutable invEscrow;
     ERC20 public immutable DBR;
     address public gov;
     address public pendingGov;
@@ -144,8 +144,7 @@ contract sINV is ERC4626, ReentrancyGuard {
      * @return The total assets in the contract.
      */
     function totalAssets() public view override returns (uint) {
-        uint _period = period;
-        uint256 periodsSinceLastBuy = block.timestamp / _period - lastBuy / _period;
+        uint256 periodsSinceLastBuy = block.timestamp / period - lastBuy / period;
         uint256 _lastPeriodRevenue = lastPeriodRevenue;
         uint256 _periodRevenue = periodRevenue;
         uint256 invBal = invEscrow.balance() + asset.balanceOf(address(this));
@@ -155,7 +154,7 @@ contract sINV is ERC4626, ReentrancyGuard {
             _lastPeriodRevenue = periodRevenue;
             _periodRevenue = 0;
         }
-        uint256 remainingLastRevenue = _lastPeriodRevenue * (_period - block.timestamp % _period) / _period;
+        uint256 remainingLastRevenue = _lastPeriodRevenue * (period - block.timestamp % period) / period;
         uint256 lockedRevenue = remainingLastRevenue + _periodRevenue;
         uint256 actualAssets;
         if(invBal > lockedRevenue){
@@ -179,13 +178,12 @@ contract sINV is ERC4626, ReentrancyGuard {
      * @return The current value of K.
      */
     function getK() public view returns (uint) {
-        uint _period = period;
         uint256 timeElapsed = block.timestamp - lastKUpdate;
-        if(timeElapsed > _period) {
+        if(timeElapsed > period) {
             return targetK;
         }
-        uint256 prevWeight = _period - timeElapsed;
-        return (prevK * prevWeight + targetK * timeElapsed) / _period;
+        uint256 prevWeight = period- timeElapsed;
+        return (prevK * prevWeight + targetK * timeElapsed) / period;
     }
 
     /**
@@ -233,15 +231,6 @@ contract sINV is ERC4626, ReentrancyGuard {
     function setMinBuffer(uint256 _minBuffer) external onlyGov {
         minBuffer = _minBuffer;
         emit SetMinBuffer(_minBuffer);
-    }
-    
-    /**
-     * @dev Sets the new revenue accrual and K updating period.
-     * @param _period The new revenue and K updating period.
-     */
-    function setPeriod(uint256 _period) external onlyGov {
-        period = _period;
-        emit SetPeriod(_period);
     }
 
     /**
