@@ -2,7 +2,6 @@
 pragma solidity ^0.8.21;
 
 import "lib/solmate/src/tokens/ERC4626.sol";
-import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 interface IInvEscrow {
     function onDeposit() external;
@@ -33,17 +32,19 @@ interface IDistributor {
     function claimable(address) external view returns(uint);
 }
 
-interface IFlashSwapIntegrator {
-    function flashSwapCallback(bytes calldata data) external;
-}
-
 /**
  * @title sINV
  * @dev Auto-compounding ERC4626 wrapper for asset FiRM deposits utilizing xy=k auctions.
  * WARNING: While this vault is safe to be used as collateral in lending markets, it should not be allowed as a borrowable asset.
  * Any protocol in which sudden, large and atomic increases in the value of an asset may be a security risk should not integrate this vault.
  */
-contract sINV is ERC4626, ReentrancyGuard {
+contract sINV is ERC4626{
+
+    struct RevenueData {
+        uint96 periodRevenue;
+        uint96 lastPeriodRevenue;
+        uint64 lastBuy;
+    }
     
     uint256 public constant MIN_ASSETS = 10**16; // 1 cent
     uint256 public constant MIN_SHARES = 10**18;
@@ -52,15 +53,20 @@ contract sINV is ERC4626, ReentrancyGuard {
     IMarket public immutable invMarket;
     IInvEscrow public immutable invEscrow;
     ERC20 public immutable DBR;
+    RevenueData public revenueData;
     address public gov;
     address public pendingGov;
     uint256 public minBuffer;
     uint256 public prevK;
     uint256 public targetK;
     uint256 public lastKUpdate;
-    uint256 public periodRevenue;
-    uint256 public lastPeriodRevenue;
-    uint256 public lastBuy;
+    //uint256 public periodRevenue;
+    //uint256 public lastPeriodRevenue;
+    //uint256 public lastBuy;
+
+    function periodRevenue() external view returns(uint256){return uint256(revenueData.periodRevenue);}
+    function lastPeriodRevenue() external view returns(uint256){return uint256(revenueData.lastPeriodRevenue);}
+    function lastBuy() external view returns(uint256){return uint256(revenueData.lastBuy);}
 
     error OnlyGov();
     error OnlyPendingGov();
@@ -144,14 +150,14 @@ contract sINV is ERC4626, ReentrancyGuard {
      * @return The total assets in the contract.
      */
     function totalAssets() public view override returns (uint) {
-        uint256 periodsSinceLastBuy = block.timestamp / period - lastBuy / period;
-        uint256 _lastPeriodRevenue = lastPeriodRevenue;
-        uint256 _periodRevenue = periodRevenue;
+        uint256 periodsSinceLastBuy = block.timestamp / period - revenueData.lastBuy / period;
+        uint256 _lastPeriodRevenue = revenueData.lastPeriodRevenue;
+        uint256 _periodRevenue = revenueData.periodRevenue;
         uint256 invBal = invEscrow.balance() + asset.balanceOf(address(this));
         if(periodsSinceLastBuy > 1){
             return invBal < MAX_ASSETS ? invBal : MAX_ASSETS;
         } else if(periodsSinceLastBuy == 1) {
-            _lastPeriodRevenue = periodRevenue;
+            _lastPeriodRevenue = _periodRevenue;
             _periodRevenue = 0;
         }
         uint256 remainingLastRevenue = _lastPeriodRevenue * (period - block.timestamp % period) / period;
@@ -163,14 +169,14 @@ contract sINV is ERC4626, ReentrancyGuard {
         return actualAssets < MAX_ASSETS ? actualAssets : MAX_ASSETS;
     }
 
-    function updatePeriodRevenue(uint256 newRevenue) internal {
-        if(block.timestamp / period > lastBuy / period) {
-            lastPeriodRevenue = periodRevenue;
-            periodRevenue = newRevenue;
+    function updatePeriodRevenue(uint96 newRevenue) internal {
+        if(block.timestamp / period > revenueData.lastBuy / period) {
+            revenueData.lastPeriodRevenue = revenueData.periodRevenue;
+            revenueData.periodRevenue = newRevenue;
         } else {
-            periodRevenue += newRevenue;
+            revenueData.periodRevenue += newRevenue;
         }
-        lastBuy = block.timestamp;
+        revenueData.lastBuy = uint64(block.timestamp);
     }
 
     /**
@@ -182,7 +188,7 @@ contract sINV is ERC4626, ReentrancyGuard {
         if(timeElapsed > period) {
             return targetK;
         }
-        uint256 prevWeight = period- timeElapsed;
+        uint256 prevWeight = period - timeElapsed;
         return (prevK * prevWeight + targetK * timeElapsed) / period;
     }
 
@@ -241,7 +247,8 @@ contract sINV is ERC4626, ReentrancyGuard {
      * @param exactDbrOut The exact amount of DBR to receive.
      * @param to The address that will receive the DBR.
      */
-    function buyDBR(uint256 exactInvIn, uint256 exactDbrOut, address to) external nonReentrant {
+    function buyDBR(uint256 exactInvIn, uint256 exactDbrOut, address to) external {
+        require(exactInvIn <= type(uint96).max, "EXCEED UINT96");
         uint256 DBRBalance = getDbrReserve();
         if(exactDbrOut > DBR.balanceOf(address(this))){
             invEscrow.claimDBR();
@@ -250,36 +257,9 @@ contract sINV is ERC4626, ReentrancyGuard {
         uint256 DBRReserve = DBRBalance - exactDbrOut;
         uint256 invReserve = k / DBRBalance + exactInvIn;
         if(invReserve * DBRReserve < k) revert Invariant();
-        updatePeriodRevenue(exactInvIn);
+        updatePeriodRevenue(uint96(exactInvIn));
         asset.transferFrom(msg.sender, address(this), exactInvIn);
         DBR.transfer(to, exactDbrOut);
-        emit Buy(msg.sender, to, exactInvIn, exactDbrOut);
-    }
-
-    /**
-     * @dev Allows users to buy DBR with asset.
-     * WARNING: Never expose this directly to a UI as it is likely to cause a loss unless a transaction is executed immediately.
-     * Instead use the sINVHelper function or custom smart contract code.
-     * @param exactInvIn The exact amount of asset to spend.
-     * @param exactDbrOut The exact amount of DBR to receive.
-     * @param to The address that will receive the DBR.
-     */
-    function flashBuyDBR(uint256 exactInvIn, uint256 exactDbrOut, address to, bytes calldata data) external nonReentrant {
-        uint256 DBRBalance = getDbrReserve();
-        if(exactDbrOut > DBR.balanceOf(address(this))){
-            invEscrow.claimDBR();
-        }
-        uint256 k = getK();
-        uint256 DBRReserve = DBRBalance - exactDbrOut;
-        uint256 invReserve = k / DBRBalance + exactInvIn;
-        uint256 invBal = asset.balanceOf(address(this));
-        uint256 sharesBefore = totalSupply;
-        if(invReserve * DBRReserve < k) revert Invariant();
-        updatePeriodRevenue(exactInvIn);
-        DBR.transfer(to, exactDbrOut);
-        IFlashSwapIntegrator(to).flashSwapCallback(data);
-        if(invBal + exactInvIn > asset.balanceOf(address(this))) revert FailedFlashBuy();
-        if(sharesBefore != totalSupply) revert FailedFlashBuy();
         emit Buy(msg.sender, to, exactInvIn, exactDbrOut);
     }
 

@@ -188,6 +188,7 @@ contract sINVTest is Test {
         vm.warp(7 days); // for totalAssets()
         dbr.mint(address(sInv), 1e18);
         exactInvIn = bound(exactInvIn, 1, sInv.MAX_ASSETS());
+        exactInvIn = bound(exactInvIn, 1, type(uint96).max);
         uint exactDbrOut = helper.getDbrOut(exactInvIn);
         inv.mint(address(this), exactInvIn);
         inv.approve(address(sInv), exactInvIn);
@@ -217,6 +218,7 @@ contract sINVTest is Test {
         vm.warp(7 days); // for totalAssets()
         dbr.mint(address(sInv), 1e18);
         exactInvIn = bound(exactInvIn, 1, sInv.MAX_ASSETS());
+        exactInvIn = bound(exactInvIn, 1, type(uint96).max);
         exactDbrOut = bound(exactDbrOut, 0, 1e18);
         inv.mint(address(this), exactInvIn);
         inv.approve(address(sInv), exactInvIn);
