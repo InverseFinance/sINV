@@ -45,6 +45,11 @@ contract sINV is ERC4626{
         uint96 lastPeriodRevenue;
         uint64 lastBuy;
     }
+
+    struct KData {
+        uint192 targetK;
+        uint64 lastKUpdate;
+    }
     
     uint256 public constant MIN_ASSETS = 10**16; // 1 cent
     uint256 public constant MIN_SHARES = 10**18;
@@ -54,19 +59,17 @@ contract sINV is ERC4626{
     IInvEscrow public immutable invEscrow;
     ERC20 public immutable DBR;
     RevenueData public revenueData;
+    KData public kData;
     address public gov;
     address public pendingGov;
     uint256 public minBuffer;
     uint256 public prevK;
-    uint256 public targetK;
-    uint256 public lastKUpdate;
-    //uint256 public periodRevenue;
-    //uint256 public lastPeriodRevenue;
-    //uint256 public lastBuy;
 
-    function periodRevenue() external view returns(uint256){return uint256(revenueData.periodRevenue);}
-    function lastPeriodRevenue() external view returns(uint256){return uint256(revenueData.lastPeriodRevenue);}
-    function lastBuy() external view returns(uint256){return uint256(revenueData.lastBuy);}
+    function periodRevenue() external view returns(uint256){return revenueData.periodRevenue;}
+    function lastPeriodRevenue() external view returns(uint256){return revenueData.lastPeriodRevenue;}
+    function lastBuy() external view returns(uint256){return revenueData.lastBuy;}
+    function targetK() external view returns(uint256){return kData.targetK;}
+    function lastKUpdate() external view returns(uint256){return kData.lastKUpdate;}
 
     error OnlyGov();
     error OnlyPendingGov();
@@ -97,7 +100,7 @@ contract sINV is ERC4626{
         invMarket = IMarket(_invMarket);
         DBR = ERC20(IMarket(_invMarket).dbr());
         gov = _gov;
-        targetK = _K;
+        kData.targetK = uint192(_K);
         prevK = _K;
         asset.approve(address(invMarket), type(uint).max);
     }
@@ -180,16 +183,16 @@ contract sINV is ERC4626{
     }
 
     /**
-     * @dev Returns the current value of K, which is a weighted average between prevK and targetK.
+     * @dev Returns the current value of K, which is a weighted average between prevK and kData.targetK.
      * @return The current value of K.
      */
     function getK() public view returns (uint) {
-        uint256 timeElapsed = block.timestamp - lastKUpdate;
+        uint256 timeElapsed = block.timestamp - kData.lastKUpdate;
         if(timeElapsed > period) {
-            return targetK;
+            return kData.targetK;
         }
         uint256 prevWeight = period - timeElapsed;
-        return (prevK * prevWeight + targetK * timeElapsed) / period;
+        return (prevK * prevWeight + kData.targetK * timeElapsed) / period;
     }
 
     /**
@@ -224,8 +227,8 @@ contract sINV is ERC4626{
     function setTargetK(uint256 _K) external onlyGov {
         if(_K < getDbrReserve()) revert KTooLow(_K, getDbrReserve());
         prevK = getK();
-        targetK = _K;
-        lastKUpdate = block.timestamp;
+        kData.targetK = uint192(_K);
+        kData.lastKUpdate = uint64(block.timestamp);
         emit SetTargetK(_K);
     }
 
@@ -249,9 +252,12 @@ contract sINV is ERC4626{
      */
     function buyDBR(uint256 exactInvIn, uint256 exactDbrOut, address to) external {
         require(exactInvIn <= type(uint96).max, "EXCEED UINT96");
-        uint256 DBRBalance = getDbrReserve();
-        if(exactDbrOut > DBR.balanceOf(address(this))){
+        uint256 DBRBalance = DBR.balanceOf(address(this));
+        if(exactDbrOut > DBRBalance){
             invEscrow.claimDBR();
+            DBRBalance = DBR.balanceOf(address(this));
+        } else {
+            DBRBalance += invEscrow.claimable(); 
         }
         uint256 k = getK();
         uint256 DBRReserve = DBRBalance - exactDbrOut;
