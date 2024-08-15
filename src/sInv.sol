@@ -43,7 +43,7 @@ contract sINV is ERC4626{
     struct RevenueData {
         uint96 periodRevenue;
         uint96 lastPeriodRevenue;
-        uint64 lastBuy;
+        uint64 lastBuyPeriod;
     }
 
     struct KData {
@@ -67,7 +67,7 @@ contract sINV is ERC4626{
 
     function periodRevenue() external view returns(uint256){return revenueData.periodRevenue;}
     function lastPeriodRevenue() external view returns(uint256){return revenueData.lastPeriodRevenue;}
-    function lastBuy() external view returns(uint256){return revenueData.lastBuy;}
+    function lastBuyPeriod() external view returns(uint256){return revenueData.lastBuyPeriod;}
     function targetK() external view returns(uint256){return kData.targetK;}
     function lastKUpdate() external view returns(uint256){return kData.lastKUpdate;}
 
@@ -77,7 +77,6 @@ contract sINV is ERC4626{
     error BelowMinShares();
     error InsufficientAssets();
     error Invariant();
-    error FailedFlashBuy();
     error UnauthorizedTokenWithdrawal();
 
     /**
@@ -153,7 +152,7 @@ contract sINV is ERC4626{
      * @return The total assets in the contract.
      */
     function totalAssets() public view override returns (uint) {
-        uint256 periodsSinceLastBuy = block.timestamp / period - revenueData.lastBuy / period;
+        uint256 periodsSinceLastBuy = block.timestamp / period - revenueData.lastBuyPeriod;
         uint256 _lastPeriodRevenue = revenueData.lastPeriodRevenue;
         uint256 _periodRevenue = revenueData.periodRevenue;
         uint256 invBal = invEscrow.balance() + asset.balanceOf(address(this));
@@ -173,13 +172,14 @@ contract sINV is ERC4626{
     }
 
     function updatePeriodRevenue(uint96 newRevenue) internal {
-        if(block.timestamp / period > revenueData.lastBuy / period) {
+        uint256 currentPeriod = block.timestamp / period;
+        if(currentPeriod > revenueData.lastBuyPeriod) {
             revenueData.lastPeriodRevenue = revenueData.periodRevenue;
             revenueData.periodRevenue = newRevenue;
+            revenueData.lastBuyPeriod = uint64(currentPeriod);
         } else {
             revenueData.periodRevenue += newRevenue;
         }
-        revenueData.lastBuy = uint64(block.timestamp);
     }
 
     /**
