@@ -17,6 +17,7 @@ contract sINVTest is Test {
     sINV sInv;
     sInvHelper helper;
     address gov;
+    address guardian = address(0xB);
     address user = address(0xA);
     uint K = 10 ** 36;
     
@@ -24,7 +25,7 @@ contract sINVTest is Test {
         inv = new Mintable("Inverse Token", "INV");
         dbr = new Mintable("Inv Borrowing Rights", "DBR");
         invMarket = new MockMarket(address(dbr), address(inv));
-        sInv = new sINV(address(inv), address(invMarket), gov, K);
+        sInv = new sINV(address(inv), address(invMarket), gov, guardian, K);
         invEscrow = MockEscrow(address(sInv.invEscrow()));
         helper = new sInvHelper(address(sInv));
     }
@@ -78,6 +79,24 @@ contract sINVTest is Test {
             sINV.BelowMinShares.selector
         );
         sInv.deposit(amount, user);
+        vm.stopPrank();
+    }
+
+    function testDeposit_fail_depositAboveDepositLimit() external {
+         uint amount = sInv.depositLimit()+1;
+        inv.mint(user, amount);
+
+        vm.startPrank(user);
+        inv.approve(address(sInv), amount);
+        vm.expectRevert(
+            sINV.AboveDepositLimit.selector
+        );
+        sInv.deposit(amount, user);
+        sInv.deposit(amount-2, user);
+        vm.expectRevert(
+            sINV.AboveDepositLimit.selector
+        );
+        sInv.deposit(2, user);
         vm.stopPrank();
     }
 
@@ -273,6 +292,10 @@ contract sINVTest is Test {
     function test_totalAssets(uint amount) public {
         //vm.warp(7 days); // for totalAssets()
         amount = bound(amount, sInv.convertToAssets(sInv.MIN_SHARES()), sInv.MAX_ASSETS());
+        if(amount > sInv.depositLimit()){
+            vm.prank(guardian);
+            sInv.setDepositLimit(amount);
+        }
         assertEq(sInv.totalAssets(), 0);
         inv.mint(address(this), amount);
         inv.approve(address(sInv), amount);
@@ -280,6 +303,29 @@ contract sINVTest is Test {
         assertEq(sInv.totalAssets(), amount);
     }
 
+    // GUARDIAN GATED FUNCTIONS //
+
+    function testSetDepositLimit() external {
+        vm.expectRevert(
+            sINV.OnlyGuardian.selector
+        );
+        sInv.setDepositLimit(1);
+
+        vm.expectRevert(
+            sINV.DepositLimitMustIncrease.selector
+        );
+        vm.prank(guardian);
+        sInv.setDepositLimit(1);
+
+        uint prevDepositLimit = sInv.depositLimit();
+        vm.expectRevert(
+            sINV.DepositLimitMustIncrease.selector
+        );
+        vm.prank(guardian);
+        sInv.setDepositLimit(prevDepositLimit);
+
+       
+    }
 
     // GOV GATED FUNCTIONS //
 
@@ -308,6 +354,19 @@ contract sINVTest is Test {
         vm.prank(gov);
         sInv.setMinBuffer(1);
         assertEq(sInv.minBuffer(), 1);
+    }
+
+    function testSetGuardian() external {
+        vm.expectRevert(
+            abi.encodeWithSelector(sINV.OnlyGov.selector)
+        );       
+        sInv.setGuardian(address(0xdead));
+
+        address prevGuardian = sInv.guardian();
+        vm.prank(gov);
+        sInv.setGuardian(address(0xdead));
+        assertEq(sInv.guardian(), address(0xdead));
+        assert(prevGuardian != address(0xdead));
     }
 
     /// AUTH ///
