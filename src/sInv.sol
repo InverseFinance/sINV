@@ -133,7 +133,7 @@ contract sINV is ERC4626{
      */
     function beforeWithdraw(uint256 assets, uint256 shares) internal override {
         uint256 _totalAssets = totalAssets();
-        if(totalAssets() < assets + MIN_ASSETS) revert InsufficientAssets();
+        if(_totalAssets < assets + MIN_ASSETS) revert InsufficientAssets();
         if(totalSupply < shares + MIN_SHARES) revert BelowMinShares();
         uint256 invBal = asset.balanceOf(address(this));
         if(assets > invBal) {
