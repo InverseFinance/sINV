@@ -4,16 +4,13 @@ pragma solidity ^0.8.21;
 import "lib/solmate/src/tokens/ERC4626.sol";
 
 interface IInvEscrow {
-    function onDeposit() external;
     function balance() external view returns (uint);
     function claimDBR() external;
     function claimable() external view returns (uint);
-    function distributor() external view returns (address);
 }
 
 interface IMarket {
     function deposit(uint256 amount) external;
-    function deposit(uint256 amount, address user) external;
     function withdraw(uint256 amount) external;
     function dbr() external returns (address);
     function escrows(address user) external returns (address);
@@ -23,10 +20,6 @@ interface IERC20 {
     function transfer(address, uint) external returns (bool);
     function transferFrom(address, address, uint) external returns (bool);
     function balanceOf(address) external view returns (uint);
-}
-
-interface IDistributor {
-    function claimable(address) external view returns(uint);
 }
 
 /**
