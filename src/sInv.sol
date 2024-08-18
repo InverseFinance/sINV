@@ -8,7 +8,6 @@ interface IInvEscrow {
     function balance() external view returns (uint);
     function claimDBR() external;
     function claimable() external view returns (uint);
-    function DBR() external view returns (address);
     function distributor() external view returns (address);
 }
 
@@ -17,8 +16,6 @@ interface IMarket {
     function deposit(uint256 amount, address user) external;
     function withdraw(uint256 amount) external;
     function dbr() external returns (address);
-    function collateral() external returns (address);
-    function predictEscrow(address user) external returns (address);
     function escrows(address user) external returns (address);
 }
 
@@ -121,8 +118,7 @@ contract sINV is ERC4626{
         if(totalSupply < MIN_SHARES) revert BelowMinShares();
         uint256 invBal = asset.balanceOf(address(this));
         if(invBal > minBuffer){
-            asset.transfer(address(invEscrow), invBal - minBuffer);
-            invEscrow.onDeposit();
+            invMarket.deposit(invBal - minBuffer);
         }
     }
 
@@ -301,6 +297,5 @@ contract sINV is ERC4626{
 
     event Buy(address indexed caller, address indexed to, uint256 exactInvIn, uint256 exactDbrOut);
     event SetTargetK(uint256 newTargetK);
-    event SetPeriod(uint256 newPeriod);
     event SetMinBuffer(uint256 newMinBuffer);
 }
