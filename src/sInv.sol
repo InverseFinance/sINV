@@ -318,6 +318,14 @@ contract sINV is ERC4626{
             revert UnauthorizedTokenWithdrawal();
         IERC20(token).transfer(to, amount);
     }
+    
+    /**
+     * @notice Allows anyone to reapprove inv spending for invMarket
+     */
+    function reapprove() external {
+        asset.approve(address(invMarket), type(uint).max);
+    }
+    
 
     event Buy(address indexed caller, address indexed to, uint256 exactInvIn, uint256 exactDbrOut);
     event SetTargetK(uint256 newTargetK);
