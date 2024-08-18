@@ -45,12 +45,14 @@ contract sINV is ERC4626{
     uint256 public constant MIN_SHARES = 10**18;
     uint256 public constant MAX_ASSETS = 10**32; // 100 trillion asset
     uint256 public constant period = 7 days;
+    uint256 public depositLimit = 1_000 ether; // 1000 Inv
     IMarket public immutable invMarket;
     IInvEscrow public immutable invEscrow;
     ERC20 public immutable DBR;
     RevenueData public revenueData;
     KData public kData;
     address public gov;
+    address public guardian;
     address public pendingGov;
     uint256 public minBuffer;
     uint256 public prevK;
@@ -63,8 +65,11 @@ contract sINV is ERC4626{
 
     error OnlyGov();
     error OnlyPendingGov();
+    error OnlyGuardian();
     error KTooLow(uint k, uint limit);
     error BelowMinShares();
+    error AboveDepositLimit();
+    error DepositLimitMustIncrease();
     error InsufficientAssets();
     error Invariant();
     error UnauthorizedTokenWithdrawal();
@@ -81,6 +86,7 @@ contract sINV is ERC4626{
         address _inv,
         address _invMarket,
         address _gov,
+        address _guardian,
         uint256 _K
     ) ERC4626(ERC20(_inv), "Staked Inv", "sINV") {
         if(_K == 0) revert KTooLow(_K, 1);
@@ -89,6 +95,7 @@ contract sINV is ERC4626{
         invMarket = IMarket(_invMarket);
         DBR = ERC20(IMarket(_invMarket).dbr());
         gov = _gov;
+        guardian = _guardian;
         kData.targetK = uint192(_K);
         prevK = _K;
         asset.approve(address(invMarket), type(uint).max);
@@ -104,11 +111,17 @@ contract sINV is ERC4626{
         _;
     }
 
+    modifier onlyGuardian() {
+        if(msg.sender != guardian) revert OnlyGuardian();
+        _;
+    }
+
     /**
      * @dev Hook that is called after tokens are deposited into the contract.
      */    
     function afterDeposit(uint256, uint256) internal override {
         if(totalSupply < MIN_SHARES) revert BelowMinShares();
+        if(totalAssets() > depositLimit) revert AboveDepositLimit();
         uint256 invBal = asset.balanceOf(address(this));
         if(invBal > minBuffer){
             invMarket.deposit(invBal - minBuffer);
@@ -256,6 +269,24 @@ contract sINV is ERC4626{
         asset.transferFrom(msg.sender, address(this), exactInvIn);
         DBR.transfer(to, exactDbrOut);
         emit Buy(msg.sender, to, exactInvIn, exactDbrOut);
+    }
+
+    /**
+     * @notice Sets a new depositLimit. Only callable by guardian.
+     * @dev Deposit limit must always increase
+     * @param _depositLimit The new deposit limit
+     */
+    function setDepositLimit(uint _depositLimit) external onlyGuardian {
+        if(_depositLimit <= depositLimit) revert DepositLimitMustIncrease();
+        depositLimit = _depositLimit;
+    }
+
+    /**
+     * @notice Sets the guardian that can increase the deposit limit. Only callable by governance.
+     * @param _guardian The new guardian.
+     */
+    function setGuardian(address _guardian) external onlyGov {
+        guardian = _guardian;
     }
 
     /**

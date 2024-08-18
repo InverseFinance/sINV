@@ -38,13 +38,14 @@ contract sINVForkTest is Test {
     sINV sInv;
     sInvHelper helper;
     address gov = address(0x926dF14a23BE491164dCF93f4c468A50ef659D5B);
+    address guardian = address(0xB);
     address user = address(0xA);
     uint K = 10 ** 36;
     
     function setUp() public{
         string memory url = vm.rpcUrl("mainnet");
         vm.createSelectFork(url);
-        sInv = new sINV(address(inv), address(invMarket), gov, K);
+        sInv = new sINV(address(inv), address(invMarket), gov, guardian, K);
         invEscrow = IInvEscrow(invMarket.predictEscrow(address(sInv)));
         helper = new sInvHelper(address(sInv));
         vm.prank(gov);
@@ -299,6 +300,10 @@ contract sINVForkTest is Test {
 
     function test_totalAssets(uint amount) public {
         amount = bound(amount, sInv.convertToAssets(sInv.MIN_SHARES()), uint(2**96-1) - inv.totalSupply());
+        if(amount > sInv.depositLimit()){
+            vm.prank(guardian);
+            sInv.setDepositLimit(amount);
+        }
         assertEq(sInv.totalAssets(), 0);
         vm.prank(gov);
         inv.mint(address(this), amount);
