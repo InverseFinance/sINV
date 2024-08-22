@@ -17,6 +17,7 @@ contract sINVTest is Test {
     sINV sInv;
     sInvHelper helper;
     address gov;
+    address guardian = address(0xB);
     address user = address(0xA);
     uint K = 10 ** 36;
     
@@ -24,7 +25,7 @@ contract sINVTest is Test {
         inv = new Mintable("Inverse Token", "INV");
         dbr = new Mintable("Inv Borrowing Rights", "DBR");
         invMarket = new MockMarket(address(dbr), address(inv));
-        sInv = new sINV(address(inv), address(invMarket), gov, K);
+        sInv = new sINV(address(inv), address(invMarket), gov, guardian, K);
         invEscrow = MockEscrow(address(sInv.invEscrow()));
         helper = new sInvHelper(address(sInv));
     }
@@ -74,8 +75,28 @@ contract sINVTest is Test {
 
         vm.startPrank(user);
         inv.approve(address(sInv), amount);
-        vm.expectRevert("Shares below MIN_SHARES");
+        vm.expectRevert(
+            sINV.BelowMinShares.selector
+        );
         sInv.deposit(amount, user);
+        vm.stopPrank();
+    }
+
+    function testDeposit_fail_depositAboveDepositLimit() external {
+         uint amount = sInv.depositLimit()+1;
+        inv.mint(user, amount);
+
+        vm.startPrank(user);
+        inv.approve(address(sInv), amount);
+        vm.expectRevert(
+            sINV.AboveDepositLimit.selector
+        );
+        sInv.deposit(amount, user);
+        sInv.deposit(amount-2, user);
+        vm.expectRevert(
+            sINV.AboveDepositLimit.selector
+        );
+        sInv.deposit(2, user);
         vm.stopPrank();
     }
 
@@ -124,7 +145,9 @@ contract sINVTest is Test {
 
         vm.startPrank(user);
         uint minShares = sInv.MIN_SHARES();
-        vm.expectRevert("Shares below MIN_SHARES");
+        vm.expectRevert(
+            sINV.BelowMinShares.selector
+        );
         sInv.withdraw(amount + 1 - minShares, user, user);
         vm.stopPrank();
     }
@@ -138,7 +161,9 @@ contract sINVTest is Test {
         vm.stopPrank();
 
         vm.prank(user);
-        vm.expectRevert("Insufficient assets");
+        vm.expectRevert(
+            sINV.InsufficientAssets.selector
+        );
         sInv.withdraw(amount, user, user);
     }
 
@@ -159,7 +184,6 @@ contract sINVTest is Test {
             assertEq(invEscrow.claimable(), 0, "Not all DBR claimed");
         }
         assertEq(inv.balanceOf(address(this)), 0, "inv balance");
-        //assertEq(savings.balanceOf(address(sInv)), exactInvIn, "savings balance");
         assertEq(dbr.balanceOf(address(1)), exactDbrOut, "dbr balance");
         assertEq(sInv.getDbrReserve(), newDbrReserve, "dbr reserve");
         assertEq(sInv.getInvReserve(), sInv.getK() / newDbrReserve, "inv reserve");
@@ -183,13 +207,13 @@ contract sINVTest is Test {
         vm.warp(7 days); // for totalAssets()
         dbr.mint(address(sInv), 1e18);
         exactInvIn = bound(exactInvIn, 1, sInv.MAX_ASSETS());
+        exactInvIn = bound(exactInvIn, 1, type(uint96).max);
         uint exactDbrOut = helper.getDbrOut(exactInvIn);
         inv.mint(address(this), exactInvIn);
         inv.approve(address(sInv), exactInvIn);
         uint newDbrReserve = sInv.getDbrReserve() - exactDbrOut;
         sInv.buyDBR(exactInvIn, exactDbrOut, address(1));
         assertEq(inv.balanceOf(address(this)), 0, "inv balance");
-        //assertEq(savings.balanceOf(address(sInv)), exactInvIn, "savings balance");
         assertEq(dbr.balanceOf(address(1)), exactDbrOut, "dbr balance");
         assertEq(sInv.getDbrReserve(), newDbrReserve, "dbr reserve");
         assertEq(sInv.getInvReserve(), sInv.getK() / newDbrReserve, "inv reserve");
@@ -213,6 +237,7 @@ contract sINVTest is Test {
         vm.warp(7 days); // for totalAssets()
         dbr.mint(address(sInv), 1e18);
         exactInvIn = bound(exactInvIn, 1, sInv.MAX_ASSETS());
+        exactInvIn = bound(exactInvIn, 1, type(uint96).max);
         exactDbrOut = bound(exactDbrOut, 0, 1e18);
         inv.mint(address(this), exactInvIn);
         inv.approve(address(sInv), exactInvIn);
@@ -221,7 +246,9 @@ contract sINVTest is Test {
         uint newInvReserve = sInv.getInvReserve() + exactInvIn;
         uint newK = newInvReserve * newDbrReserve;
         if(newK < _K) {
-            vm.expectRevert("Invariant");
+            vm.expectRevert(
+                sINV.Invariant.selector
+            );
             sInv.buyDBR(exactInvIn, exactDbrOut, address(1));
         } else {
             sInv.buyDBR(exactInvIn, exactDbrOut, address(1));
@@ -248,14 +275,6 @@ contract sINVTest is Test {
         }
     }
 
-    function test_reapprove() public {
-        vm.prank(address(sInv));
-        inv.approve(address(invMarket), 0);
-        assertEq(inv.allowance(address(sInv), address(invMarket)), 0);
-        sInv.reapprove();
-        assertEq(inv.allowance(address(sInv), address(invMarket)), type(uint).max);
-    }
-
     function test_getK() public {
         vm.warp(7 days);
         assertEq(sInv.getK(), K);
@@ -273,6 +292,10 @@ contract sINVTest is Test {
     function test_totalAssets(uint amount) public {
         //vm.warp(7 days); // for totalAssets()
         amount = bound(amount, sInv.convertToAssets(sInv.MIN_SHARES()), sInv.MAX_ASSETS());
+        if(amount > sInv.depositLimit()){
+            vm.prank(guardian);
+            sInv.setDepositLimit(amount);
+        }
         assertEq(sInv.totalAssets(), 0);
         inv.mint(address(this), amount);
         inv.approve(address(sInv), amount);
@@ -280,11 +303,36 @@ contract sINVTest is Test {
         assertEq(sInv.totalAssets(), amount);
     }
 
+    // GUARDIAN GATED FUNCTIONS //
+
+    function testSetDepositLimit() external {
+        vm.expectRevert(
+            sINV.OnlyGuardian.selector
+        );
+        sInv.setDepositLimit(1);
+
+        vm.expectRevert(
+            sINV.DepositLimitMustIncrease.selector
+        );
+        vm.prank(guardian);
+        sInv.setDepositLimit(1);
+
+        uint prevDepositLimit = sInv.depositLimit();
+        vm.expectRevert(
+            sINV.DepositLimitMustIncrease.selector
+        );
+        vm.prank(guardian);
+        sInv.setDepositLimit(prevDepositLimit);
+
+       
+    }
 
     // GOV GATED FUNCTIONS //
 
     function testSetTargetK() external {
-        vm.expectRevert("ONLY GOV");
+        vm.expectRevert(
+            abi.encodeWithSelector(sINV.OnlyGov.selector)
+        );
         sInv.setTargetK(1e40);
 
         assertEq(sInv.targetK(), K, "Target K not equal constructor supplied K");
@@ -297,7 +345,9 @@ contract sINVTest is Test {
     }
 
     function testSetMinBuffer() external {
-        vm.expectRevert("ONLY GOV");
+        vm.expectRevert(
+            abi.encodeWithSelector(sINV.OnlyGov.selector)
+        );
         sInv.setMinBuffer(1);
 
         assertEq(sInv.minBuffer(), 0);
@@ -306,20 +356,25 @@ contract sINVTest is Test {
         assertEq(sInv.minBuffer(), 1);
     }
 
-    function testSetPeriod() external {
-        vm.expectRevert("ONLY GOV");
-        sInv.setPeriod(1 days);
+    function testSetGuardian() external {
+        vm.expectRevert(
+            abi.encodeWithSelector(sINV.OnlyGov.selector)
+        );       
+        sInv.setGuardian(address(0xdead));
 
-        assertEq(sInv.period(), 7 days);
+        address prevGuardian = sInv.guardian();
         vm.prank(gov);
-        sInv.setPeriod(1 days);
-        assertEq(sInv.period(), 1 days);
+        sInv.setGuardian(address(0xdead));
+        assertEq(sInv.guardian(), address(0xdead));
+        assert(prevGuardian != address(0xdead));
     }
 
     /// AUTH ///
 
     function testSetPendingGov() external {
-        vm.expectRevert("ONLY GOV");
+        vm.expectRevert(
+            abi.encodeWithSelector(sINV.OnlyGov.selector)
+        );
         sInv.setPendingGov(user);
 
         assertEq(sInv.pendingGov(), address(0));
@@ -329,7 +384,9 @@ contract sINVTest is Test {
     }
 
     function testAcceptPendingGov() external {
-        vm.expectRevert("ONLY PENDINGGOV");
+        vm.expectRevert(
+            abi.encodeWithSelector(sINV.OnlyPendingGov.selector)
+        );
         sInv.acceptGov();
         vm.prank(gov);
         sInv.setPendingGov(user);

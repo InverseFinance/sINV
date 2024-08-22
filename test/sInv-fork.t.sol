@@ -38,13 +38,14 @@ contract sINVForkTest is Test {
     sINV sInv;
     sInvHelper helper;
     address gov = address(0x926dF14a23BE491164dCF93f4c468A50ef659D5B);
+    address guardian = address(0xB);
     address user = address(0xA);
     uint K = 10 ** 36;
     
     function setUp() public{
         string memory url = vm.rpcUrl("mainnet");
         vm.createSelectFork(url);
-        sInv = new sINV(address(inv), address(invMarket), gov, K);
+        sInv = new sINV(address(inv), address(invMarket), gov, guardian, K);
         invEscrow = IInvEscrow(invMarket.predictEscrow(address(sInv)));
         helper = new sInvHelper(address(sInv));
         vm.prank(gov);
@@ -101,7 +102,7 @@ contract sINVForkTest is Test {
 
         vm.startPrank(user);
         inv.approve(address(sInv), amount);
-        vm.expectRevert("Shares below MIN_SHARES");
+        vm.expectRevert(sINV.BelowMinShares.selector);
         sInv.deposit(amount, user);
         vm.stopPrank();
     }
@@ -151,7 +152,7 @@ contract sINVForkTest is Test {
 
         vm.startPrank(user);
         uint minShares = sInv.MIN_SHARES();
-        vm.expectRevert("Shares below MIN_SHARES");
+        vm.expectRevert(sINV.BelowMinShares.selector);
         sInv.withdraw(amount + 1 - minShares, user, user);
         vm.stopPrank();
     }
@@ -165,7 +166,7 @@ contract sINVForkTest is Test {
         vm.stopPrank();
 
         vm.prank(user);
-        vm.expectRevert("Insufficient assets");
+        vm.expectRevert(sINV.InsufficientAssets.selector);
         sInv.withdraw(amount, user, user);
     }
 
@@ -257,7 +258,7 @@ contract sINVForkTest is Test {
         uint newInvReserve = sInv.getInvReserve() + exactInvIn;
         uint newK = newInvReserve * newDbrReserve;
         if(newK < _K) {
-            vm.expectRevert("Invariant");
+            vm.expectRevert(sINV.Invariant.selector);
             sInv.buyDBR(exactInvIn, exactDbrOut, address(1));
         } else {
             sInv.buyDBR(exactInvIn, exactDbrOut, address(1));
@@ -284,14 +285,6 @@ contract sINVForkTest is Test {
         }
     }
 
-    function test_reapprove() public {
-        vm.prank(address(sInv));
-        inv.approve(address(invMarket), 0);
-        assertEq(inv.allowance(address(sInv), address(invMarket)), 0);
-        sInv.reapprove();
-        assertEq(inv.allowance(address(sInv), address(invMarket)), 2**96-1);
-    }
-
     function test_getK() public {
         assertEq(sInv.getK(), K);
         vm.prank(gov);
@@ -307,6 +300,10 @@ contract sINVForkTest is Test {
 
     function test_totalAssets(uint amount) public {
         amount = bound(amount, sInv.convertToAssets(sInv.MIN_SHARES()), uint(2**96-1) - inv.totalSupply());
+        if(amount > sInv.depositLimit()){
+            vm.prank(guardian);
+            sInv.setDepositLimit(amount);
+        }
         assertEq(sInv.totalAssets(), 0);
         vm.prank(gov);
         inv.mint(address(this), amount);
@@ -319,7 +316,7 @@ contract sINVForkTest is Test {
     // GOV GATED FUNCTIONS //
 
     function testSetTargetK() external {
-        vm.expectRevert("ONLY GOV");
+        vm.expectRevert(sINV.OnlyGov.selector);
         sInv.setTargetK(1e40);
 
         assertEq(sInv.targetK(), K, "Target K not equal constructor supplied K");
@@ -332,7 +329,7 @@ contract sINVForkTest is Test {
     }
 
     function testSetMinBuffer() external {
-        vm.expectRevert("ONLY GOV");
+        vm.expectRevert(sINV.OnlyGov.selector);
         sInv.setMinBuffer(1);
 
         assertEq(sInv.minBuffer(), 0);
@@ -341,20 +338,10 @@ contract sINVForkTest is Test {
         assertEq(sInv.minBuffer(), 1);
     }
 
-    function testSetPeriod() external {
-        vm.expectRevert("ONLY GOV");
-        sInv.setPeriod(1 days);
-
-        assertEq(sInv.period(), 7 days);
-        vm.prank(gov);
-        sInv.setPeriod(1 days);
-        assertEq(sInv.period(), 1 days);
-    }
-
     /// AUTH ///
 
     function testSetPendingGov() external {
-        vm.expectRevert("ONLY GOV");
+        vm.expectRevert(sINV.OnlyGov.selector);
         sInv.setPendingGov(user);
 
         assertEq(sInv.pendingGov(), address(0));
@@ -364,7 +351,7 @@ contract sINVForkTest is Test {
     }
 
     function testAcceptPendingGov() external {
-        vm.expectRevert("ONLY PENDINGGOV");
+        vm.expectRevert(sINV.OnlyPendingGov.selector);
         sInv.acceptGov();
         vm.prank(gov);
         sInv.setPendingGov(user);

@@ -41,14 +41,7 @@ contract SimpleArb {
         uint invBal = dbrTriPool.exchange(dbrIndex, invIndex, dbrOut, 0);
         wethOut = invTriPool.exchange(invIndex, wethIndex, invBal, expectedRevenue);
     }
-
-    function flashArb(uint invIn, uint expectedRevenue) external returns(uint wethOut){
-        uint dbrOut = getDbrOut(invIn);
-        sInv.flashBuyDBR(invIn, dbrOut, address(this), abi.encode(invIn)); //Will execute flashSwapCallback
-        uint invBal = inv.balanceOf(address(this));
-        wethOut = invTriPool.exchange(invIndex, wethIndex, invBal, expectedRevenue);
-    }
-    
+   
     function getRevenue(uint amountWeth) public view returns(int){
         uint invIn = invTriPool.get_dy(wethIndex, invIndex, amountWeth);
         uint dbrOut = getDbrOut(invIn);
@@ -62,12 +55,6 @@ contract SimpleArb {
         sInv.buyDBR(invIn, dbrOut, address(this));
         invBal = dbrTriPool.exchange(dbrIndex, invIndex, dbrOut, 0);
     }
-
-    function flashArbInv(uint invIn, uint expectedRevenue) external {
-        uint dbrOut = getDbrOut(invIn);
-        sInv.flashBuyDBR(invIn, dbrOut, address(this), abi.encode(invIn)); //Will execute flashSwapCallback
-    }
-
     function getRevenueInv(uint invIn) public view returns(int){
         uint dbrOut = getDbrOut(invIn);
         uint invBal = dbrTriPool.get_dy(dbrIndex, invIndex, dbrOut);
@@ -90,15 +77,6 @@ contract SimpleArb {
         return (amount, getRevenue(amount));
     }
 
-    function flashSwapCallback(bytes calldata data) external virtual {
-        require(msg.sender == address(sInv));
-        uint dbrBal = dbr.balanceOf(address(this));
-        dbrTriPool.exchange(dbrIndex, invIndex, dbrBal, 0);
-        uint invOwed = abi.decode(data, (uint));
-        //Pay off invOwed
-        inv.transfer(address(sInv), invOwed);
-    }
-
     function wethToInv(uint amountWeth) external view returns(uint invOut) {
         invOut = invTriPool.get_dy(wethIndex, invIndex, amountWeth);
     }
@@ -110,33 +88,5 @@ contract SimpleArb {
         uint denominator = invReserve + invIn;
         dbrOut = numerator / denominator;
     }
-
-
 }
 
-contract EmptyArb is SimpleArb{
-
-    constructor(address _sInv) SimpleArb(_sInv){
-    
-    }
-
-    function flashSwapCallback(bytes calldata data) external override {
-        require(msg.sender == address(sInv));
-        //Do nothing
-    }
-}
-
-contract ReentrantArb is SimpleArb{
-
-    constructor(address _sInv) SimpleArb(_sInv){
-    
-    }
-
-    function flashSwapCallback(bytes calldata data) external override {
-        require(msg.sender == address(sInv));
-        uint invOwed = abi.decode(data, (uint));
-        uint dbrOut = getDbrOut(invOwed);
-        sInv.buyDBR(invOwed, dbrOut, address(this));
-        dbrTriPool.exchange(dbrIndex, invIndex, dbrOut, 0);
-    }
-}

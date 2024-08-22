@@ -1,24 +1,19 @@
 // SPDX-License-Identifier: MIT License
-pragma solidity 0.8.21;
+pragma solidity ^0.8.21;
 
 import "lib/solmate/src/tokens/ERC4626.sol";
 
 interface IInvEscrow {
-    function onDeposit() external;
     function balance() external view returns (uint);
     function claimDBR() external;
     function claimable() external view returns (uint);
-    function DBR() external view returns (address);
-    function distributor() external view returns (address);
 }
 
 interface IMarket {
-    function deposit(uint amount) external;
-    function deposit(uint amount, address user) external;
-    function withdraw(uint amount) external;
+    function deposit(uint256 amount) external;
+    function withdraw(uint256 amount) external;
     function dbr() external returns (address);
-    function collateral() external returns (address);
-    function predictEscrow(address user) external returns (address);
+    function escrows(address user) external returns (address);
 }
 
 interface IERC20 {
@@ -27,39 +22,57 @@ interface IERC20 {
     function balanceOf(address) external view returns (uint);
 }
 
-interface IDistributor {
-    function claimable(address) external view returns(uint);
-}
-
-interface IFlashSwapIntegrator {
-    function flashSwapCallback(bytes calldata data) external;
-}
-
 /**
  * @title sINV
  * @dev Auto-compounding ERC4626 wrapper for asset FiRM deposits utilizing xy=k auctions.
  * WARNING: While this vault is safe to be used as collateral in lending markets, it should not be allowed as a borrowable asset.
  * Any protocol in which sudden, large and atomic increases in the value of an asset may be a security risk should not integrate this vault.
  */
-contract sINV is ERC4626 {
+contract sINV is ERC4626{
+
+    struct RevenueData {
+        uint96 periodRevenue;
+        uint96 lastPeriodRevenue;
+        uint64 lastBuyPeriod;
+    }
+
+    struct KData {
+        uint192 targetK;
+        uint64 lastKUpdate;
+    }
     
-    uint public constant MIN_ASSETS = 10**16; // 1 cent
-    uint public constant MIN_SHARES = 10**18;
-    uint public constant MAX_ASSETS = 10**32; // 100 trillion asset
-    uint public period = 7 days;
+    uint256 public constant MIN_ASSETS = 10**16; // 1 cent
+    uint256 public constant MIN_SHARES = 10**18;
+    uint256 public constant MAX_ASSETS = 10**32; // 100 trillion asset
+    uint256 public constant period = 7 days;
+    uint256 public depositLimit = 1_000 ether; // 1000 Inv
     IMarket public immutable invMarket;
-    IInvEscrow public invEscrow;
+    IInvEscrow public immutable invEscrow;
     ERC20 public immutable DBR;
-    ERC20 public immutable INV;
+    RevenueData public revenueData;
+    KData public kData;
     address public gov;
+    address public guardian;
     address public pendingGov;
-    uint public minBuffer;
-    uint public prevK;
-    uint public targetK;
-    uint public lastKUpdate;
-    uint public periodRevenue;
-    uint public lastPeriodRevenue;
-    uint public lastBuy;
+    uint256 public minBuffer;
+    uint256 public prevK;
+
+    function periodRevenue() external view returns(uint256){return revenueData.periodRevenue;}
+    function lastPeriodRevenue() external view returns(uint256){return revenueData.lastPeriodRevenue;}
+    function lastBuyPeriod() external view returns(uint256){return revenueData.lastBuyPeriod;}
+    function targetK() external view returns(uint256){return kData.targetK;}
+    function lastKUpdate() external view returns(uint256){return kData.lastKUpdate;}
+
+    error OnlyGov();
+    error OnlyPendingGov();
+    error OnlyGuardian();
+    error KTooLow(uint k, uint limit);
+    error BelowMinShares();
+    error AboveDepositLimit();
+    error DepositLimitMustIncrease();
+    error InsufficientAssets();
+    error Invariant();
+    error UnauthorizedTokenWithdrawal();
 
     /**
      * @dev Constructor for sINV contract.
@@ -73,35 +86,45 @@ contract sINV is ERC4626 {
         address _inv,
         address _invMarket,
         address _gov,
-        uint _K
-    ) ERC4626(ERC20(_inv), "Staked Inv", "sasset") {
-        require(_K > 0, "_K must be positive");
+        address _guardian,
+        uint256 _K
+    ) ERC4626(ERC20(_inv), "Staked Inv", "sINV") {
+        if(_K == 0) revert KTooLow(_K, 1);
         IMarket(_invMarket).deposit(0); //creates an escrow on behalf of the sINV contract
-        invEscrow = IInvEscrow(IMarket(_invMarket).predictEscrow(address(this)));
+        invEscrow = IInvEscrow(IMarket(_invMarket).escrows(address(this)));
         invMarket = IMarket(_invMarket);
         DBR = ERC20(IMarket(_invMarket).dbr());
-        INV = ERC20(IMarket(_invMarket).collateral());
         gov = _gov;
-        targetK = _K;
+        guardian = _guardian;
+        kData.targetK = uint192(_K);
         prevK = _K;
         asset.approve(address(invMarket), type(uint).max);
     }
 
     modifier onlyGov() {
-        require(msg.sender == gov, "ONLY GOV");
+        if(msg.sender != gov) revert OnlyGov();
+        _;
+    }
+
+    modifier onlyPendingGov() {
+        if(msg.sender != pendingGov) revert OnlyPendingGov();
+        _;
+    }
+
+    modifier onlyGuardian() {
+        if(msg.sender != guardian) revert OnlyGuardian();
         _;
     }
 
     /**
      * @dev Hook that is called after tokens are deposited into the contract.
-     * @param assets The amount of assets that were deposited.
      */    
-    function afterDeposit(uint256 assets, uint256) internal override {
-        require(totalSupply >= MIN_SHARES, "Shares below MIN_SHARES");
-        uint invBal = asset.balanceOf(address(this));
+    function afterDeposit(uint256, uint256) internal override {
+        if(totalSupply < MIN_SHARES) revert BelowMinShares();
+        if(totalAssets() > depositLimit) revert AboveDepositLimit();
+        uint256 invBal = asset.balanceOf(address(this));
         if(invBal > minBuffer){
-            asset.transfer(address(invEscrow), invBal - minBuffer);
-            invEscrow.onDeposit();
+            invMarket.deposit(invBal - minBuffer);
         }
     }
 
@@ -111,12 +134,12 @@ contract sINV is ERC4626 {
      * @param shares The amount of shares to withdraw
      */
     function beforeWithdraw(uint256 assets, uint256 shares) internal override {
-        uint _totalAssets = totalAssets();
-        require(totalAssets() >= assets + MIN_ASSETS, "Insufficient assets");
-        require(totalSupply >= shares + MIN_SHARES, "Shares below MIN_SHARES");
-        uint invBal = asset.balanceOf(address(this));
+        uint256 _totalAssets = totalAssets();
+        if(_totalAssets < assets + MIN_ASSETS) revert InsufficientAssets();
+        if(totalSupply < shares + MIN_SHARES) revert BelowMinShares();
+        uint256 invBal = asset.balanceOf(address(this));
         if(assets > invBal) {
-            uint withdrawAmount = assets - invBal + minBuffer;
+            uint256 withdrawAmount = assets - invBal + minBuffer;
             if(_totalAssets < withdrawAmount){
                 invMarket.withdraw(assets - invBal);
             } else {
@@ -131,47 +154,47 @@ contract sINV is ERC4626 {
      * @return The total assets in the contract.
      */
     function totalAssets() public view override returns (uint) {
-        uint periodsSinceLastBuy = block.timestamp / period - lastBuy / period;
-        uint _lastPeriodRevenue = lastPeriodRevenue;
-        uint _periodRevenue = periodRevenue;
-        uint invBal = invEscrow.balance() + asset.balanceOf(address(this));
+        uint256 periodsSinceLastBuy = block.timestamp / period - revenueData.lastBuyPeriod;
+        uint256 _lastPeriodRevenue = revenueData.lastPeriodRevenue;
+        uint256 _periodRevenue = revenueData.periodRevenue;
+        uint256 invBal = invEscrow.balance() + asset.balanceOf(address(this));
         if(periodsSinceLastBuy > 1){
             return invBal < MAX_ASSETS ? invBal : MAX_ASSETS;
         } else if(periodsSinceLastBuy == 1) {
-            _lastPeriodRevenue = periodRevenue;
+            _lastPeriodRevenue = _periodRevenue;
             _periodRevenue = 0;
         }
-        uint remainingLastRevenue = _lastPeriodRevenue * (period - block.timestamp % period) / period;
-        uint lockedRevenue = remainingLastRevenue + _periodRevenue;
-        uint actualAssets;
+        uint256 remainingLastRevenue = _lastPeriodRevenue * (period - block.timestamp % period) / period;
+        uint256 lockedRevenue = remainingLastRevenue + _periodRevenue;
+        uint256 actualAssets;
         if(invBal > lockedRevenue){
             actualAssets = invBal - lockedRevenue;
         }
         return actualAssets < MAX_ASSETS ? actualAssets : MAX_ASSETS;
     }
 
-    function updatePeriodRevenue(uint newRevenue) internal {
-        if(block.timestamp / period > lastBuy / period) {
-            lastPeriodRevenue = periodRevenue;
-            periodRevenue = newRevenue;
+    function updatePeriodRevenue(uint96 newRevenue) internal {
+        uint256 currentPeriod = block.timestamp / period;
+        if(currentPeriod > revenueData.lastBuyPeriod) {
+            revenueData.lastPeriodRevenue = revenueData.periodRevenue;
+            revenueData.periodRevenue = newRevenue;
+            revenueData.lastBuyPeriod = uint64(currentPeriod);
         } else {
-            periodRevenue += newRevenue;
+            revenueData.periodRevenue += newRevenue;
         }
-        lastBuy = block.timestamp;
     }
 
     /**
-     * @dev Returns the current value of K, which is a weighted average between prevK and targetK.
+     * @dev Returns the current value of K, which is a weighted average between prevK and kData.targetK.
      * @return The current value of K.
      */
     function getK() public view returns (uint) {
-        uint timeElapsed = block.timestamp - lastKUpdate;
+        uint256 timeElapsed = block.timestamp - kData.lastKUpdate;
         if(timeElapsed > period) {
-            return targetK;
+            return kData.targetK;
         }
-        uint targetWeight = timeElapsed;
-        uint prevWeight = period - timeElapsed;
-        return (prevK * prevWeight + targetK * targetWeight) / period;
+        uint256 prevWeight = period - timeElapsed;
+        return (prevK * prevWeight + kData.targetK * timeElapsed) / period;
     }
 
     /**
@@ -187,7 +210,7 @@ contract sINV is ERC4626 {
      * @param DBRReserve The DBR reserve value.
      * @return The calculated asset reserve.
      */
-    function getInvReserve(uint DBRReserve) public view returns (uint) {
+    function getInvReserve(uint256 DBRReserve) public view returns (uint) {
         return getK() / DBRReserve;
     }
 
@@ -203,11 +226,11 @@ contract sINV is ERC4626 {
      * @dev Sets a new target K value.
      * @param _K The new target K value.
      */
-    function setTargetK(uint _K) external onlyGov {
-        require(_K > getDbrReserve(), "K must be larger than DBR reserve");
+    function setTargetK(uint256 _K) external onlyGov {
+        if(_K < getDbrReserve()) revert KTooLow(_K, getDbrReserve());
         prevK = getK();
-        targetK = _K;
-        lastKUpdate = block.timestamp;
+        kData.targetK = uint192(_K);
+        kData.lastKUpdate = uint64(block.timestamp);
         emit SetTargetK(_K);
     }
 
@@ -216,19 +239,10 @@ contract sINV is ERC4626 {
      * @dev Min buffer is the buffer of INV held by the sINV contract, which can be withdrawn much more cheaply than if they were staked
      * @param _minBuffer The new min buffer
      */
-    function setMinBuffer(uint _minBuffer) external onlyGov {
+    function setMinBuffer(uint256 _minBuffer) external onlyGov {
         minBuffer = _minBuffer;
         emit SetMinBuffer(_minBuffer);
     }
-    
-    /**
-     * @dev Sets the new revenue accrual and K updating period.
-     * @param _period The new revenue and K updating period.
-     */
-    function setPeriod(uint _period) external onlyGov {
-        period = _period;
-        emit SetPeriod(_period);
-    }
 
     /**
      * @dev Allows users to buy DBR with asset.
@@ -238,48 +252,41 @@ contract sINV is ERC4626 {
      * @param exactDbrOut The exact amount of DBR to receive.
      * @param to The address that will receive the DBR.
      */
-    function buyDBR(uint exactInvIn, uint exactDbrOut, address to) external {
-        require(to != address(0), "Zero address");
-        uint DBRBalance = getDbrReserve();
-        if(exactDbrOut > DBR.balanceOf(address(this))){
+    function buyDBR(uint256 exactInvIn, uint256 exactDbrOut, address to) external {
+        require(exactInvIn <= type(uint96).max, "EXCEED UINT96");
+        uint256 DBRBalance = DBR.balanceOf(address(this));
+        if(exactDbrOut > DBRBalance){
             invEscrow.claimDBR();
+            DBRBalance = DBR.balanceOf(address(this));
+        } else {
+            DBRBalance += invEscrow.claimable(); 
         }
-        uint k = getK();
-        uint DBRReserve = DBRBalance - exactDbrOut;
-        uint invReserve = k / DBRBalance + exactInvIn;
-        require(invReserve * DBRReserve >= k, "Invariant");
-        updatePeriodRevenue(exactInvIn);
-        INV.transferFrom(msg.sender, address(this), exactInvIn);
+        uint256 k = getK();
+        uint256 DBRReserve = DBRBalance - exactDbrOut;
+        uint256 invReserve = k / DBRBalance + exactInvIn;
+        if(invReserve * DBRReserve < k) revert Invariant();
+        updatePeriodRevenue(uint96(exactInvIn));
+        asset.transferFrom(msg.sender, address(this), exactInvIn);
         DBR.transfer(to, exactDbrOut);
         emit Buy(msg.sender, to, exactInvIn, exactDbrOut);
     }
 
     /**
-     * @dev Allows users to buy DBR with asset.
-     * WARNING: Never expose this directly to a UI as it's likely to cause a loss unless a transaction is executed immediately.
-     * Instead use the sINVHelper function or custom smart contract code.
-     * @param exactInvIn The exact amount of asset to spend.
-     * @param exactDbrOut The exact amount of DBR to receive.
-     * @param to The address that will receive the DBR.
+     * @notice Sets a new depositLimit. Only callable by guardian.
+     * @dev Deposit limit must always increase
+     * @param _depositLimit The new deposit limit
      */
-    function flashBuyDBR(uint exactInvIn, uint exactDbrOut, address to, bytes calldata data) external {
-        uint DBRBalance = getDbrReserve();
-        if(exactDbrOut > DBR.balanceOf(address(this))){
-            invEscrow.claimDBR();
-        }
-        uint k = getK();
-        uint DBRReserve = DBRBalance - exactDbrOut;
-        uint invReserve = k / DBRBalance + exactInvIn;
-        uint invBal = asset.balanceOf(address(this));
-        uint sharesBefore = totalSupply;
-        require(invReserve * DBRReserve >= k, "Invariant");
-        updatePeriodRevenue(exactInvIn);
-        DBR.transfer(to, exactDbrOut);
-        IFlashSwapIntegrator(to).flashSwapCallback(data);
-        //TODO: Make sure there's no way to increase invBalance, in which the flash buyer can immediately withdraw
-        require(invBal + exactInvIn <= asset.balanceOf(address(this)), "Failed flash buy");
-        require(sharesBefore == totalSupply, "Failed flash buy");
-        emit Buy(msg.sender, to, exactInvIn, exactDbrOut);
+    function setDepositLimit(uint _depositLimit) external onlyGuardian {
+        if(_depositLimit <= depositLimit) revert DepositLimitMustIncrease();
+        depositLimit = _depositLimit;
+    }
+
+    /**
+     * @notice Sets the guardian that can increase the deposit limit. Only callable by governance.
+     * @param _guardian The new guardian.
+     */
+    function setGuardian(address _guardian) external onlyGov {
+        guardian = _guardian;
     }
 
     /**
@@ -293,8 +300,7 @@ contract sINV is ERC4626 {
     /**
      * @dev Allows the pending governance to accept its role.
      */
-    function acceptGov() external {
-        require(msg.sender == pendingGov, "ONLY PENDINGGOV");
+    function acceptGov() external onlyPendingGov {
         gov = pendingGov;
         pendingGov = address(0);
     }
@@ -306,14 +312,22 @@ contract sINV is ERC4626 {
      * @param amount The amount of tokens to sweep.
      * @param to The recipient address of the swept tokens.
      */
-    function sweep(address token, uint amount, address to) public onlyGov {
-        require(address(DBR) != token, "Not authorized");
-        require(address(asset) != token, "Not authorized");
+    function sweep(address token, uint256 amount, address to) public onlyGov {
+        if(address(DBR) == token ||
+            address(asset) == token)
+            revert UnauthorizedTokenWithdrawal();
         IERC20(token).transfer(to, amount);
     }
+    
+    /**
+     * @notice Allows anyone to reapprove inv spending for invMarket
+     */
+    function reapprove() external {
+        asset.approve(address(invMarket), type(uint).max);
+    }
+    
 
-    event Buy(address indexed caller, address indexed to, uint exactInvIn, uint exactDbrOut);
-    event SetTargetK(uint newTargetK);
-    event SetPeriod(uint newPeriod);
-    event SetMinBuffer(uint newMinBuffer);
+    event Buy(address indexed caller, address indexed to, uint256 exactInvIn, uint256 exactDbrOut);
+    event SetTargetK(uint256 newTargetK);
+    event SetMinBuffer(uint256 newMinBuffer);
 }
