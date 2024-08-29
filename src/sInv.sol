@@ -45,7 +45,7 @@ contract sINV is ERC4626{
     uint256 public constant MIN_SHARES = 10**18;
     uint256 public constant MAX_ASSETS = 10**32; // 100 trillion asset
     uint256 public constant period = 7 days;
-    uint256 public depositLimit = 1_000 ether; // 1000 Inv
+    uint256 public depositLimit;
     IMarket public immutable invMarket;
     IInvEscrow public immutable invEscrow;
     ERC20 public immutable DBR;
@@ -87,6 +87,7 @@ contract sINV is ERC4626{
         address _invMarket,
         address _gov,
         address _guardian,
+        uint256 _depositLimit,
         uint256 _K
     ) ERC4626(ERC20(_inv), "Staked Inv", "sINV") {
         if(_K == 0) revert KTooLow(_K, 1);
@@ -97,6 +98,7 @@ contract sINV is ERC4626{
         gov = _gov;
         guardian = _guardian;
         kData.targetK = uint192(_K);
+        depositLimit = _depositLimit;
         prevK = _K;
         asset.approve(address(invMarket), type(uint).max);
     }
