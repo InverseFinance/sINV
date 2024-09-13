@@ -284,7 +284,6 @@ contract sINV is ERC4626{
      * @param _depositLimit The new deposit limit
      */
     function setDepositLimit(uint _depositLimit) external onlyGuardian {
-        if(_depositLimit <= depositLimit) revert DepositLimitMustIncrease();
         depositLimit = _depositLimit;
     }
 

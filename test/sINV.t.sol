@@ -343,20 +343,15 @@ contract sINVTest is Test {
         );
         sInv.setDepositLimit(1);
 
-        vm.expectRevert(
-            sINV.DepositLimitMustIncrease.selector
-        );
-        vm.prank(guardian);
-        sInv.setDepositLimit(1);
-
         uint prevDepositLimit = sInv.depositLimit();
-        vm.expectRevert(
-            sINV.DepositLimitMustIncrease.selector
-        );
         vm.prank(guardian);
-        sInv.setDepositLimit(prevDepositLimit);
+        sInv.setDepositLimit(prevDepositLimit + 1);
+        assertEq(sInv.depositLimit(), prevDepositLimit + 1);
 
-       
+        prevDepositLimit = sInv.depositLimit();
+        vm.prank(guardian);
+        sInv.setDepositLimit(prevDepositLimit - 1);
+        assertEq(sInv.depositLimit(), prevDepositLimit - 1);
     }
 
     // GOV GATED FUNCTIONS //
