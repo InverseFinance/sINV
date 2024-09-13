@@ -19,13 +19,14 @@ contract sINVTest is Test {
     address gov;
     address guardian = address(0xB);
     address user = address(0xA);
+    uint maxDeposit = 1000 ether;
     uint K = 10 ** 36;
     
     function setUp() public{
         inv = new Mintable("Inverse Token", "INV");
         dbr = new Mintable("Inv Borrowing Rights", "DBR");
         invMarket = new MockMarket(address(dbr), address(inv));
-        sInv = new sINV(address(inv), address(invMarket), gov, guardian, K);
+        sInv = new sINV(address(inv), address(invMarket), gov, guardian, maxDeposit, K);
         invEscrow = MockEscrow(address(sInv.invEscrow()));
         helper = new sInvHelper(address(sInv));
     }

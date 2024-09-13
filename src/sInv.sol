@@ -177,7 +177,12 @@ contract sINV is ERC4626{
 
     function updatePeriodRevenue(uint96 newRevenue) internal {
         uint256 currentPeriod = block.timestamp / period;
-        if(currentPeriod > revenueData.lastBuyPeriod) {
+        uint256 periodsSinceLastBuy = currentPeriod - revenueData.lastBuyPeriod;
+        if(periodsSinceLastBuy > 1){
+            revenueData.lastPeriodRevenue = 0;
+            revenueData.periodRevenue = newRevenue;
+            revenueData.lastBuyPeriod = uint64(currentPeriod);
+        } else if(periodsSinceLastBuy - revenueData.lastBuyPeriod == 1) {
             revenueData.lastPeriodRevenue = revenueData.periodRevenue;
             revenueData.periodRevenue = newRevenue;
             revenueData.lastBuyPeriod = uint64(currentPeriod);

@@ -40,12 +40,13 @@ contract sINVForkTest is Test {
     address gov = address(0x926dF14a23BE491164dCF93f4c468A50ef659D5B);
     address guardian = address(0xB);
     address user = address(0xA);
+    uint maxDeposit = 1000 ether;
     uint K = 10 ** 36;
     
     function setUp() public{
         string memory url = vm.rpcUrl("mainnet");
         vm.createSelectFork(url);
-        sInv = new sINV(address(inv), address(invMarket), gov, guardian, K);
+        sInv = new sINV(address(inv), address(invMarket), gov, guardian, maxDeposit, K);
         invEscrow = IInvEscrow(invMarket.predictEscrow(address(sInv)));
         helper = new sInvHelper(address(sInv));
         vm.prank(gov);
