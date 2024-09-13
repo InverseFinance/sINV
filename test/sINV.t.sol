@@ -203,6 +203,37 @@ contract sINVTest is Test {
         assertEq(sInv.totalAssets(), exactInvIn, "total assets 28 days");
     }
 
+    function test_buyDBRMulti_succeedsAfter3Periods() public {
+        vm.warp(7 days); // for totalAssets()
+        dbr.mint(address(sInv), 1e18);
+        uint exactInvIn = 1 ether;
+        uint exactDbrOut = helper.getDbrOut(exactInvIn);
+        inv.mint(address(this), exactInvIn * 2);
+        inv.approve(address(sInv), exactInvIn * 2);
+        uint newDbrReserve = sInv.getDbrReserve() - exactDbrOut;
+        uint dbrClaimableBefore = invEscrow.claimable();
+        uint dbrBalBefore = dbr.balanceOf(address(sInv));
+        sInv.buyDBR(exactInvIn, exactDbrOut, address(1));
+        if(dbrBalBefore >= exactDbrOut){
+            assertEq(invEscrow.claimable(), dbrClaimableBefore, "No claims made if enough tokens to pay for transfer");
+        } else {
+            assertEq(invEscrow.claimable(), 0, "Not all DBR claimed");
+        }
+        assertEq(inv.balanceOf(address(this)), 1 ether, "inv balance");
+        assertEq(dbr.balanceOf(address(1)), exactDbrOut, "dbr balance");
+        assertEq(sInv.getDbrReserve(), newDbrReserve, "dbr reserve");
+        assertEq(sInv.getInvReserve(), sInv.getK() / newDbrReserve, "inv reserve");
+        assertEq(sInv.periodRevenue(), exactInvIn, "period revenue");
+        assertEq(sInv.totalAssets(), 0, "total assets 0 days");
+        vm.warp(21 days);
+        assertEq(sInv.totalAssets(), exactInvIn, "total assets 21 days");
+        uint totalAssetsBefore = sInv.totalAssets();
+        exactDbrOut = helper.getDbrOut(exactInvIn);
+        sInv.buyDBR(exactInvIn, exactDbrOut, address(1));
+        assertEq(sInv.totalAssets(), totalAssetsBefore, "Total assets not unchanged");
+        assertEq(sInv.totalAssets(), exactInvIn, "total assets 21 days after second buy");
+    }
+
     function test_buyDBR(uint exactInvIn) public {
         vm.warp(7 days); // for totalAssets()
         dbr.mint(address(sInv), 1e18);
