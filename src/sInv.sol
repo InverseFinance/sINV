@@ -182,7 +182,7 @@ contract sINV is ERC4626{
             revenueData.lastPeriodRevenue = 0;
             revenueData.periodRevenue = newRevenue;
             revenueData.lastBuyPeriod = uint64(currentPeriod);
-        } else if(periodsSinceLastBuy - revenueData.lastBuyPeriod == 1) {
+        } else if(periodsSinceLastBuy == 1) {
             revenueData.lastPeriodRevenue = revenueData.periodRevenue;
             revenueData.periodRevenue = newRevenue;
             revenueData.lastBuyPeriod = uint64(currentPeriod);
