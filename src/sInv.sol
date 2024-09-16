@@ -46,6 +46,7 @@ contract sINV is ERC4626{
     uint256 public constant MAX_ASSETS = 10**32; // 100 trillion asset
     uint256 public constant period = 7 days;
     uint256 public depositLimit;
+    bool public isShutdown;
     IMarket public immutable invMarket;
     IInvEscrow public immutable invEscrow;
     ERC20 public immutable DBR;
@@ -56,6 +57,7 @@ contract sINV is ERC4626{
     address public pendingGov;
     uint256 public minBuffer;
     uint256 public prevK;
+    uint256 public totalDbrSeeded;
 
     function periodRevenue() external view returns(uint256){return revenueData.periodRevenue;}
     function lastPeriodRevenue() external view returns(uint256){return revenueData.lastPeriodRevenue;}
@@ -73,6 +75,7 @@ contract sINV is ERC4626{
     error InsufficientAssets();
     error Invariant();
     error UnauthorizedTokenWithdrawal();
+    error IsShutdown();
 
     /**
      * @dev Constructor for sINV contract.
@@ -124,6 +127,7 @@ contract sINV is ERC4626{
     function afterDeposit(uint256, uint256) internal override {
         if(totalSupply < MIN_SHARES) revert BelowMinShares();
         if(totalAssets() > depositLimit) revert AboveDepositLimit();
+        if(isShutdown) revert IsShutdown();
         uint256 invBal = asset.balanceOf(address(this));
         if(invBal > minBuffer){
             invMarket.deposit(invBal - minBuffer);
@@ -137,6 +141,12 @@ contract sINV is ERC4626{
      */
     function beforeWithdraw(uint256 assets, uint256 shares) internal override {
         uint256 _totalAssets = totalAssets();
+        if(isShutdown){
+            _totalAssets = invEscrow.balance();
+            invEscrow.claimDBR();
+            uint dbrShare = (DBR.balanceOf(address(this)) - totalDbrSeeded) * assets / _totalAssets;
+            DBR.transfer(msg.sender, dbrShare);
+        }
         if(_totalAssets < assets + MIN_ASSETS) revert InsufficientAssets();
         if(totalSupply < shares + MIN_SHARES) revert BelowMinShares();
         uint256 invBal = asset.balanceOf(address(this));
@@ -260,6 +270,7 @@ contract sINV is ERC4626{
      * @param to The address that will receive the DBR.
      */
     function buyDBR(uint256 exactInvIn, uint256 exactDbrOut, address to) external {
+        if(isShutdown) revert IsShutdown();
         require(exactInvIn <= type(uint96).max, "EXCEED UINT96");
         uint256 DBRBalance = DBR.balanceOf(address(this));
         if(exactDbrOut > DBRBalance){
@@ -311,6 +322,15 @@ contract sINV is ERC4626{
         pendingGov = address(0);
     }
 
+    function shutDown() external onlyGov {
+        isShutdown = true;
+    }
+
+    function seed(uint amount) external {
+        totalDbrSeeded += amount;
+        DBR.transferFrom(msg.sender, address(this), amount);
+    }
+
     /**
      * @dev Allows governance to sweep any ERC20 token from the contract.
      * @dev Excludes the ability to sweep DBR tokens.
@@ -319,9 +339,14 @@ contract sINV is ERC4626{
      * @param to The recipient address of the swept tokens.
      */
     function sweep(address token, uint256 amount, address to) public onlyGov {
-        if(address(DBR) == token ||
-            address(asset) == token)
+        if(address(DBR) == token && isShutdown) {
+            totalDbrSeeded -= amount;
+            DBR.transfer(gov, amount);
+        } else if(
+            address(DBR) == token ||
+            address(asset) == token) {
             revert UnauthorizedTokenWithdrawal();
+        }
         IERC20(token).transfer(to, amount);
     }
     
